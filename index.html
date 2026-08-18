@@ -242,7 +242,7 @@ button:active{transform:scale(.98)}
    НАСТРОЙКИ GOOGLE SHEETS
    =========================
    Вставьте реальные ссылки на опубликованные Google Sheets.
-   Прокси sheetsjson используется по вашему ТЗ.
+   Данные загружаются напрямую через OpenSheet.
 */
 const SHEETS = {
   books: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/КНИГИ",
@@ -260,50 +260,7 @@ const state = {
   player:{audio:null,tracks:[],index:0,playing:false}
 };
 
-const DEMO_BOOKS = [
-  {
-    id:"1",title:"Тень розы",author:"Midnight Collection",series:"Тёмные сады",series_order:"1",
-    trops:"dark romance, enemies to lovers, forced proximity",triggers:"тяжёлые эмоциональные темы; насилие",
-    quotes:"Некоторые тайны расцветают только в полночь.|Она не боялась тьмы — она знала её по имени.",
-    description:"Она привыкла доверять только собственным правилам. Он привык получать всё, чего хотел. Их встреча превращает спокойную жизнь в опасную игру, где каждый шаг меняет расстановку сил.",
-    cover_emoji:"🌹",rating:"4.2",release_date:"2026-08-01",status:"published"
-  },
-  {
-    id:"2",title:"Клинок полуночи",author:"Midnight Collection",series:"Тёмные сады",series_order:"2",
-    trops:"dark academia, forbidden romance, mystery",triggers:"опасность; мрачная атмосфера",
-    quotes:"У каждой двери есть цена.|Некоторые клятвы невозможно нарушить.",
-    description:"Старая библиотека хранит больше историй, чем написано в её книгах. Когда новая тайна приводит героиню к запретному крылу, ей приходится выбирать между правдой и безопасностью.",
-    cover_emoji:"🗡️",rating:"4.7",release_date:"2026-08-08",status:"published"
-  },
-  {
-    id:"3",title:"Маска из шёлка",author:"Midnight Collection",series:"Бал масок",series_order:"1",
-    trops:"secret identity, gothic, slow burn",triggers:"напряжённые сцены; психологическое давление",
-    quotes:"На балу все носят маски.|Иногда самая опасная тайна — собственное имя.",
-    description:"Один вечер. Две маски. И тайна, которую нельзя раскрывать до рассвета. Но чем ближе они становятся, тем труднее понять, кто именно играет по правилам.",
-    cover_emoji:"🎭",rating:"4.5",release_date:"2026-07-21",status:"published"
-  },
-  {
-    id:"4",title:"Ядовитый плющ",author:"Midnight Collection",series:"Бал масок",series_order:"2",
-    trops:"rivals, gothic romance, secrets",triggers:"угрозы; мрачные темы",
-    quotes:"Красивые вещи тоже умеют ранить.",
-    description:"Она возвращается туда, где однажды поклялась больше не появляться. Старый дом встречает её знакомыми тенями и человеком, которому она меньше всего хотела бы доверять.",
-    cover_emoji:"🌿",rating:"4.1",release_date:"2026-07-05",status:"published"
-  },
-  {
-    id:"5",title:"Дом без окон",author:"Midnight Collection",series:"",series_order:"",
-    trops:"mystery, gothic, forced proximity",triggers:"страшные темы; тревожные эпизоды",
-    quotes:"Дом помнил всё.",
-    description:"Наследство, которого никто не ждал, приводит героиню в старый дом. Здесь нет зеркал, часов и окон — зато есть дневник, который продолжает писать кто-то неизвестный.",
-    cover_emoji:"🏚️",rating:"4.3",release_date:"2026-06-19",status:"published"
-  },
-  {
-    id:"6",title:"Серебряная клятва",author:"Midnight Collection",series:"",series_order:"",
-    trops:"fantasy, forbidden romance, royalty",triggers:"война; опасность",
-    quotes:"Клятвы звучат особенно громко перед рассветом.",
-    description:"Серебряная печать связывает двух людей, которые должны были стать врагами. Теперь им предстоит решить, что важнее: долг, свобода или обещание.",
-    cover_emoji:"🌙",rating:"4.8",release_date:"2026-05-29",status:"published"
-  }
-];
+
 
 const QUOTES = [
   "Некоторые тайны расцветают только в полночь.",
@@ -406,7 +363,7 @@ function toast(text){
 
 /* ---------- DATA ---------- */
 async function fetchJSON(url){
-  if(!url || url.includes("ССЫЛКА_НА_")) throw new Error("placeholder");
+  if(!url) throw new Error("missing URL");
   const r=await fetch(url,{cache:"no-store"}); if(!r.ok)throw new Error("HTTP "+r.status);
   return await r.json();
 }
@@ -443,11 +400,9 @@ async function fetchRemote(silent){
     render();toast("Библиотека обновлена");
   }catch(e){
     if(!state.books.length){
-      state.books=DEMO_BOOKS.map(normalizeBook);
-      state.playlists=[];state.files=[];state.covers=[];state.announcements=[];
-      storageSet(CACHE_KEY,{books:state.books,playlists:[],files:[],covers:[],announcements:[],demo:true,updatedAt:Date.now()});
+      state.books=[];state.playlists=[];state.files=[];state.covers=[];state.announcements=[];
       render();
-      toast("Открыта демонстрационная библиотека. Добавьте ссылки на таблицы.");
+      toast("В таблице КНИГИ пока нет данных");
     }else if(!silent)toast("Не удалось обновить данные — показан кэш");
   }
 }
