@@ -374,13 +374,108 @@ function unwrap(data){
   }
   return [];
 }
-async function loadData(force=false){
-  const cached=storageGet(CACHE_KEY,null);
-  if(!force && cached && cached.books?.length){
-    state.books=cached.books.map(normalizeBook);
-    state.playlists=cached.playlists||[];state.files=cached.files||[];state.covers=cached.covers||[];state.announcements=cached.announcements||[];
-    render(); fetchRemote(true).catch(()=>{});
-    return;
+async function loadAllData() {
+    // Показываем индикатор загрузки
+    showToast('🔄 Загрузка данных...');
+    
+    try {
+        // Проверяем каждую ссылку отдельно
+        const results = await Promise.allSettled([
+            fetch(SHEETS.books).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status} для КНИГИ`);
+                return r.json();
+            }),
+            fetch(SHEETS.playlists).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status} для ПЛЕЙЛИСТЫ`);
+                return r.json();
+            }),
+            fetch(SHEETS.files).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status} для ФАЙЛЫ`);
+                return r.json();
+            }),
+            fetch(SHEETS.covers).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status} для ОБЛОЖКИ`);
+                return r.json();
+            }),
+            fetch(SHEETS.announcements).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status} для АНОНСЫ`);
+                return r.json();
+            })
+        ]);
+        
+        // Проверяем результаты
+        const errors = [];
+        const [booksResult, playlistsResult, filesResult, coversResult, announcementsResult] = results;
+        
+        if (booksResult.status === 'rejected') {
+            errors.push(`❌ КНИГИ: ${booksResult.reason.message}`);
+        } else {
+            window.books = booksResult.value;
+        }
+        
+        if (playlistsResult.status === 'rejected') {
+            errors.push(`❌ ПЛЕЙЛИСТЫ: ${playlistsResult.reason.message}`);
+        } else {
+            window.playlists = playlistsResult.value;
+        }
+        
+        if (filesResult.status === 'rejected') {
+            errors.push(`❌ ФАЙЛЫ: ${filesResult.reason.message}`);
+        } else {
+            window.files = filesResult.value;
+        }
+        
+        if (coversResult.status === 'rejected') {
+            errors.push(`❌ ОБЛОЖКИ: ${coversResult.reason.message}`);
+        } else {
+            window.covers = coversResult.value;
+        }
+        
+        if (announcementsResult.status === 'rejected') {
+            errors.push(`❌ АНОНСЫ: ${announcementsResult.reason.message}`);
+        } else {
+            window.announcements = announcementsResult.value;
+        }
+        
+        // Если есть ошибки — показываем их
+        if (errors.length > 0) {
+            showToast(`⚠️ Ошибки: ${errors.length}`);
+            console.log('Ошибки загрузки:', errors.join('\n'));
+            // Сохраняем кэш если есть
+            const cache = JSON.parse(localStorage.getItem('midnight_books_cache') || '{}');
+            if (cache.books) {
+                window.books = cache.books;
+                showToast('📚 Данные из кэша (офлайн-режим)');
+            }
+        } else {
+            // Все данные загружены успешно
+            localStorage.setItem('midnight_books_cache', JSON.stringify({
+                books: window.books,
+                announcements: window.announcements || [],
+                timestamp: Date.now()
+            }));
+            showToast('✅ Данные загружены!');
+        }
+        
+        // Отображаем данные
+        renderAll();
+        
+    } catch (error) {
+        console.error('Критическая ошибка:', error);
+        showToast('❌ Ошибка загрузки. Проверь интернет и ссылки.');
+        
+        // Загружаем из кэша
+        const cache = JSON.parse(localStorage.getItem('midnight_books_cache') || '{}');
+        if (cache.books) {
+            window.books = cache.books;
+            window.announcements = cache.announcements || [];
+            renderAll();
+            showToast('📚 Данные из кэша (офлайн-режим)');
+        } else {
+            showToast('⚠️ Нет данных. Проверь настройки таблиц.');
+        }
+    }
+}
   }
   await fetchRemote(false);
 }
