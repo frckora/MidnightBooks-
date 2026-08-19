@@ -1757,7 +1757,7 @@
       }
       try {
         await fetchRemote(true);
-        await loadStats();
+        loadStats().catch(() => {});
       } catch {
         if (cached && cached.books?.length) {
           applyData(cached);
@@ -2837,8 +2837,14 @@
       openChannel;
     document.getElementById("aboutBtn").onclick =
       openAbout;
-    document.getElementById("refreshBtn").onclick =
-      () => fetchRemote(false);
+    document.getElementById("refreshBtn").onclick = async () => {
+      try {
+        await fetchRemote(false);
+        loadStats().catch(() => {});
+      } catch {
+        toast("Не удалось обновить библиотеку");
+      }
+    };
     document.querySelectorAll(".nav-btn")
       .forEach(b => {
         b.onclick = () => {
@@ -3000,8 +3006,9 @@
         }
       } catch {}
     })();
-    loadData(false)
-      .then(() => loadStats());
+    loadData(false).catch(() => {
+      try { render(); } catch {}
+    });
     // =========================
     // АДМИН-ПАНЕЛЬ
     // =========================
