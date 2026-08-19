@@ -249,10 +249,15 @@ const SHEETS = {
   announcements: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/АНОНСЫ"
 };
 
+// URL Google Apps Script Web App. После публикации Code.gs вставь сюда URL,
+// который заканчивается на /exec. Пока URL не указан, вся статистика равна 0.
+const STATS_API = "https://script.google.com/macros/s/AKfycbwefIzQhdYwfIXTFKHdHUMC0Xj6C_lolyQ-w0qbx5S97XioQEykXNMfw2rsgN6JcPhO7g/exec";
+
 const CACHE_KEY = "midnightbooks_cache_v2";
 const state = {
   page:"home", catalogMode:"books", search:"", sort:"date", trope:"all",
   books:[], playlists:[], files:[], covers:[], announcements:[],
+  stats:{}, statisticsEnabled:false, userRatings:{},
   currentBook:null, modalTab:"description", seriesView:null,
   player:{audio:null,tracks:[],index:0,playing:false}
 };
@@ -348,7 +353,7 @@ function normalizeBook(b,i){
     quotes:String(b.quotes??""),
     description:String(b.description??"Описание пока не добавлено."),
     cover_emoji:String(b.cover_emoji??["🌹","🗡️","🎭","🌿"][i%4]),
-    rating:num(b.rating,0),
+    rating:0,
     release_date:String(b.release_date??""),
     status:String(b.status??"published")
   };
@@ -371,26 +376,61 @@ function getStatus(id){return storageGet("book_status_"+id,"")}
 function setStatus(id,status){
   storageSet("book_status_"+id,status); toast(status==="reading"?"Статус: читаю":"Статус обновлён"); render();
 }
-function getViews(id){return storageGet("book_views_"+id,0)}
-function addView(id){
-  const k="book_views_"+id; storageSet(k,getViews(id)+1)
+function statsReady(){
+  return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:[?#].*)?$/.test(String(STATS_API||"").trim());
 }
-function getDownloads(id){return storageGet("book_downloads_"+id,0)}
-function addDownload(id){const k="book_downloads_"+id;storageSet(k,getDownloads(id)+1)}
-function getUserRating(id){return storageGet("book_rating_"+id,0)}
-function getRatingCount(id,b){
-  return storageGet("book_rating_count_"+id, num(b?.rating_count,12));
+function zeroStats(){return {views:0,downloads:0,rating_sum:0,rating_count:0,rating:0};}
+function telegramUserId(){
+  try{const u=tg()?.initDataUnsafe?.user;if(u?.id)return String(u.id)}catch{}
+  let id=storageGet("midnightbooks_guest_id","");
+  if(!id){id="guest_"+Math.random().toString(36).slice(2)+"_"+Date.now();storageSet("midnightbooks_guest_id",id)}
+  return id;
 }
-function getBookRating(b){
-  const user=getUserRating(b.id);
-  return user || num(b.rating,0);
+function getBookStats(id){return state.stats[String(id)]||zeroStats()}
+function getViews(id){return Number(getBookStats(id).views||0)}
+function getDownloads(id){return Number(getBookStats(id).downloads||0)}
+function getRatingCount(id){return Number(getBookStats(id).rating_count||0)}
+function getBookRating(b){return Number(getBookStats(b.id).rating||0)}
+function getUserRating(id){return Number(state.userRatings[String(id)]||0)}
+function applyStatsPayload(data){
+  state.statisticsEnabled=!!data?.enabled;
+  const incoming=data?.stats||{};
+  state.stats={};
+  state.books.forEach(b=>state.stats[String(b.id)]=incoming[String(b.id)]||zeroStats());
+  state.userRatings=data?.my_ratings||{};
 }
-function setUserRating(id,rating){
-  storageSet("book_rating_"+id,rating);
-  storageSet("book_rating_count_"+id,getRatingCount(id,state.currentBook)+1);
-  toast("Оценка сохранена");
-  render();
-  openBook(id,false);
+function statsRequest(action,bookId="",rating=0){
+  if(!statsReady())return Promise.resolve({ok:true,enabled:false,stats:{},my_ratings:{}});
+  return new Promise((resolve,reject)=>{
+    const cb="mbStatsCb_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+    const script=document.createElement("script");
+    const timer=setTimeout(()=>{cleanup();reject(new Error("stats timeout"))},15000);
+    function cleanup(){clearTimeout(timer);try{delete window[cb]}catch{}script.remove()}
+    window[cb]=(data)=>{cleanup();applyStatsPayload(data);resolve(data)};
+    const q=new URLSearchParams({callback:cb,action:String(action),book_id:String(bookId||""),rating:String(rating||0),user_id:telegramUserId(),t:String(Date.now())});
+    script.src=STATS_API+"?"+q.toString();
+    script.onerror=()=>{cleanup();reject(new Error("stats network error"))};
+    document.head.appendChild(script);
+  });
+}
+async function loadStats(){
+  if(!statsReady()){
+    state.statisticsEnabled=false;state.stats={};state.userRatings={};
+    state.books.forEach(b=>state.stats[String(b.id)]=zeroStats());
+    render();return;
+  }
+  try{await statsRequest("stats");render()}
+  catch{state.statisticsEnabled=false;state.stats={};state.userRatings={};state.books.forEach(b=>state.stats[String(b.id)]=zeroStats())}
+}
+async function recordView(id){
+  if(!state.statisticsEnabled)return;
+  try{await statsRequest("view",id);render();if(state.currentBook?.id===id)showBookModal()}catch{}
+}
+async function setUserRating(id,rating){
+  if(!state.statisticsEnabled){toast("Статистика ещё не запущена");return}
+  const r=Math.max(1,Math.min(5,Number(rating)||0));
+  try{await statsRequest("rating",id,r);toast("Оценка сохранена");render();if(state.currentBook?.id===id)showBookModal()}
+  catch{toast("Не удалось сохранить оценку")}
 }
 function quoteOfDay(){
   const d=new Date(), key=d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate();
@@ -430,6 +470,7 @@ async function loadData(force=false){
 
   if(force){
     await fetchRemote(false);
+    await loadStats();
     return;
   }
 
@@ -437,6 +478,7 @@ async function loadData(force=false){
   // Кэш используется только если сеть/таблицы недоступны.
   try{
     await fetchRemote(true);
+    await loadStats();
   }catch{
     if(cached && cached.books?.length){
       applyData(cached);
@@ -747,8 +789,9 @@ function statusSection(title,books){
 /* ---------- MODAL ---------- */
 function openBook(id,count=true){
   const b=state.books.find(x=>String(x.id)===String(id));if(!b)return;
-  state.currentBook=b;state.modalTab="description";if(count)addView(b.id);
+  state.currentBook=b;state.modalTab="description";
   showBookModal();
+  if(count)recordView(b.id);
 }
 function showBookModal(){
   const b=state.currentBook;if(!b)return;
@@ -757,7 +800,7 @@ function showBookModal(){
   document.getElementById("modalBox").innerHTML=`
     <button class="close" id="closeModal">×</button>
     <div class="modal-head">${coverHTML(b,"cover modal-cover")}<div class="modal-meta"><div class="modal-title">${h(b.title)}</div><div class="author" style="margin-top:7px">${h(b.author)}</div>
-      <div class="rating-line">⭐ ${getBookRating(b).toFixed(1)} (${getRatingCount(b.id,b)} оценок)</div>
+      <div class="rating-line">⭐ ${getBookRating(b).toFixed(1)} (${getRatingCount(b.id)} оценок)</div>
       ${b.series?`<button class="series-link" id="modalSeries">📚 Серия: ${h(b.series)}</button>`:""}
     </div></div>
     <div class="modal-tabs"><button class="${state.modalTab==="description"?"active":""}" data-mtab="description">📖 Описание</button><button class="${state.modalTab==="playlist"?"active":""}" data-mtab="playlist">🎵 Плейлист</button><button class="${state.modalTab==="quotes"?"active":""}" data-mtab="quotes">💬 Цитаты</button></div>
@@ -785,7 +828,7 @@ function modalContent(b,tracks,quotes){
     ${triggers.length?`<ul class="trigger-list">${triggers.map(t=>`<li>🩸 ${h(t)}</li>`).join("")}</ul>`:""}
     <div style="margin-top:12px;color:var(--muted);font:12px Arial,sans-serif">Ваша оценка</div>
     <div class="star-rating">${[1,2,3,4,5].map(n=>`<button class="star ${n<=getUserRating(b.id)?"active":""}" data-rate="${n}">★</button>`).join("")}</div>
-    <div style="font:11px Arial;color:var(--muted)">⭐ ${getBookRating(b).toFixed(1)} · ${getRatingCount(b.id,b)} оценок · ${getViews(b.id)} просмотров · ${getDownloads(b.id)} скачиваний</div>
+    <div style="font:11px Arial;color:var(--muted)">⭐ ${getBookRating(b).toFixed(1)} · ${getRatingCount(b.id)} оценок · ${getViews(b.id)} просмотров · ${getDownloads(b.id)} скачиваний</div>
     ${b.series?`<div style="margin-top:14px"><b style="color:var(--silver2)">Другие книги серии</b>${state.books.filter(x=>x.series===b.series&&x.id!==b.id).sort((x,y)=>num(x.series_order)-num(y.series_order)).map(x=>`<div class="series-book" data-other-book="${h(x.id)}">${h(x.title)}</div>`).join("")||'<div style="font:12px Arial;color:var(--muted);margin-top:7px">Других книг нет.</div>'}</div>`:""}`;
 }
 function statusLabel(s){return {reading:"Читаю",planned:"В планах",read:"Прочитано"}[s]||"В планах"}
@@ -829,7 +872,6 @@ async function downloadBook(book){
   const url=normalizeFileUrl(source);
   if(!url){toast("Некорректная ссылка EPUB");return}
 
-  addDownload(book.id);
   const filename=(String(source).match(/\/([^/?#]+?)(?:\?.*)?$/)?.[1] || `${book.title||"book"}.epub`)
     .replace(/%20/g," ");
 
@@ -848,6 +890,7 @@ async function downloadBook(book){
     a.click();
     a.remove();
     setTimeout(()=>URL.revokeObjectURL(blobUrl),1000);
+    if(state.statisticsEnabled){try{await statsRequest("download",book.id);render();if(state.currentBook?.id===book.id)showBookModal()}catch{}}
     toast("EPUB скачивается");
     return;
   }catch(e){
@@ -936,7 +979,7 @@ document.getElementById("modalBox").addEventListener("click",e=>{
     if(t.enableClosingConfirmation)t.disableClosingConfirmation();
   }catch{}
 })();
-loadData(false);
+loadData(false).then(()=>loadStats());
 </script>
 </body>
 </html>
