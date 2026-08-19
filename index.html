@@ -219,8 +219,17 @@
       border-color: rgba(201,199,200,.3);
       transform: translateY(-1px);
     }
-    .admin-btn:active {
+    .admin-btn:active,
+    .admin-btn.is-pressed {
       transform: scale(.94);
+      background: rgba(201,199,200,.18) !important;
+      border-color: var(--silver2) !important;
+      color: var(--silver2) !important;
+    }
+    .admin-btn {
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      cursor: pointer;
     }
     .admin-btn.wine {
       background: rgba(100,30,42,.3);
@@ -1757,7 +1766,7 @@
       }
       try {
         await fetchRemote(true);
-        loadStats().catch(() => {});
+        await loadStats();
       } catch {
         if (cached && cached.books?.length) {
           applyData(cached);
@@ -2837,14 +2846,8 @@
       openChannel;
     document.getElementById("aboutBtn").onclick =
       openAbout;
-    document.getElementById("refreshBtn").onclick = async () => {
-      try {
-        await fetchRemote(false);
-        loadStats().catch(() => {});
-      } catch {
-        toast("Не удалось обновить библиотеку");
-      }
-    };
+    document.getElementById("refreshBtn").onclick =
+      () => fetchRemote(false);
     document.querySelectorAll(".nav-btn")
       .forEach(b => {
         b.onclick = () => {
@@ -3006,9 +3009,24 @@
         }
       } catch {}
     })();
-    loadData(false).catch(() => {
-      try { render(); } catch {}
+    loadData(false)
+      .then(() => loadStats());
+    // =========================
+    // НАДЁЖНЫЙ TAP-FEEDBACK ДЛЯ АДМИН-КНОПОК
+    // =========================
+    document.addEventListener("pointerdown", e => {
+      const btn = e.target.closest(".admin-btn");
+      if (btn) btn.classList.add("is-pressed");
     });
+    document.addEventListener("pointerup", e => {
+      const btn = e.target.closest(".admin-btn");
+      if (btn) setTimeout(() => btn.classList.remove("is-pressed"), 120);
+    });
+    document.addEventListener("pointercancel", e => {
+      const btn = e.target.closest(".admin-btn");
+      if (btn) btn.classList.remove("is-pressed");
+    });
+
     // =========================
     // АДМИН-ПАНЕЛЬ
     // =========================
@@ -3149,15 +3167,15 @@
             </div>
             <div class="admin-btn-group">
               <button class="admin-btn wine"
-                      onclick="editBook(${book.id})">
+                      type="button" onclick="editBook(${JSON.stringify(String(book.id))})">
                 ✏️
               </button>
               <button class="admin-btn"
-                      onclick="editQuotes(${book.id})">
+                      type="button" onclick="editQuotes(${JSON.stringify(String(book.id))})">
                 💬
               </button>
               <button class="admin-btn danger"
-                      onclick="deleteBook(${book.id})">
+                      type="button" onclick="deleteBook(${JSON.stringify(String(book.id))})">
                 🗑️
               </button>
             </div>
@@ -3260,7 +3278,7 @@
       if (!confirm("Удалить книгу?")) {
         return;
       }
-      state.books = state.books.filter(b => b.id !== id);
+      state.books = state.books.filter(b => String(b.id) !== String(id));
       storageSet(CACHE_KEY, {
         books: state.books,
         playlists: state.playlists,
@@ -3274,7 +3292,7 @@
       render();
     }
     function editBook(id) {
-      const book = state.books.find(b => b.id === id);
+      const book = state.books.find(b => String(b.id) === String(id));
       if (!book) {
         return;
       }
@@ -3318,7 +3336,7 @@
       `;
     }
     function saveEditBook(id) {
-      const book = state.books.find(b => b.id === id);
+      const book = state.books.find(b => String(b.id) === String(id));
       if (!book) {
         return;
       }
@@ -3354,7 +3372,7 @@
     }
     // ---- ЦИТАТЫ ----
     function editQuotes(id) {
-      const book = state.books.find(b => b.id === id);
+      const book = state.books.find(b => String(b.id) === String(id));
       if (!book) {
         return;
       }
@@ -3382,17 +3400,17 @@
                 <input type="text" class="admin-input quote-input"
                        value="${h(q)}" style="flex:1;" data-index="${i}">
                 <button class="admin-btn danger"
-                        onclick="removeQuote(this, ${id})">
+                        type="button" onclick="removeQuote(this, ${JSON.stringify(String(id))})">
                   ✕
                 </button>
               </div>`
             ).join('')}
           </div>
-          <button class="btn" onclick="addQuoteField(${id})"
+          <button class="btn" type="button" onclick="addQuoteField(${JSON.stringify(String(id))})"
                   style="width:100%;margin:8px 0;">
             ➕ Добавить цитату
           </button>
-          <button class="btn primary" onclick="saveQuotes(${id})"
+          <button class="btn primary" type="button" onclick="saveQuotes(${JSON.stringify(String(id))})"
                   style="width:100%;">
             💾 Сохранить все цитаты
           </button>
@@ -3417,7 +3435,7 @@
                placeholder="Введите цитату..." style="flex:1;"
                data-index="${idx}">
         <button class="admin-btn danger"
-                onclick="removeQuote(this, ${id})">
+                type="button" onclick="removeQuote(this, ${JSON.stringify(String(id))})">
           ✕
         </button>
       `;
@@ -3438,7 +3456,7 @@
       }
     }
     function saveQuotes(id) {
-      const book = state.books.find(b => b.id === id);
+      const book = state.books.find(b => String(b.id) === String(id));
       if (!book) {
         return;
       }
