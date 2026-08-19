@@ -249,8 +249,6 @@ const SHEETS = {
   announcements: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/АНОНСЫ"
 };
 
-// URL Google Apps Script Web App. После публикации Code.gs вставь сюда URL,
-// который заканчивается на /exec. Пока URL не указан, вся статистика равна 0.
 const STATS_API = "https://script.google.com/macros/s/AKfycbwefIzQhdYwfIXTFKHdHUMC0Xj6C_lolyQ-w0qbx5S97XioQEykXNMfw2rsgN6JcPhO7g/exec";
 
 const CACHE_KEY = "midnightbooks_cache_v2";
@@ -289,30 +287,21 @@ function escUrl(url){
   try{return new URL(String(url).trim(), window.location.href).href}catch{return "";}
 }
 
-// Приводим значение из Google Sheets к прямому URL изображения.
-// Google Sheets иногда отдаёт не сам URL, а текст ссылки, HTML-ссылку
-// или формулу IMAGE(). Для карточки нужен именно адрес картинки.
 function normalizeCoverUrl(value){
   let raw=String(value ?? "").trim();
   if(!raw)return "";
 
-  // Формула Google Sheets: =IMAGE("https://...")
   const imageFormula=raw.match(/=IMAGE\s*\(\s*["']([^"']+)["']/i);
   if(imageFormula)raw=imageFormula[1];
 
-  // HTML: <a href="https://...">Обложка</a>
   const href=raw.match(/href\s*=\s*["']([^"']+)["']/i);
   if(href)raw=href[1];
 
-  // Если в ячейке остался текст вокруг URL — достаём сам URL.
   const urlMatch=raw.match(/https?:\/\/[^\s<>"']+/i);
   if(urlMatch)raw=urlMatch[0];
 
   raw=raw.replace(/[),.;]+$/g,"");
 
-  // GitHub: в таблице сейчас стоят ссылки вида
-  // https://github.com/frckora/MidnightBooks-/blob/main/covers/book.jpg
-  // Для <img> нужна raw-ссылка.
   let github=raw.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
   if(github){
     const owner=github[1];
@@ -322,11 +311,9 @@ function normalizeCoverUrl(value){
     return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
   }
 
-  // GitHub mobile/share links can occasionally arrive without /blob/.
   let githubRaw=raw.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
   if(githubRaw)return raw;
 
-  // Google Drive: превращаем ссылку просмотра файла в прямую картинку.
   let m=raw.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
   if(m)return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w1000`;
 
@@ -474,8 +461,6 @@ async function loadData(force=false){
     return;
   }
 
-  // Сначала пробуем получить свежие данные.
-  // Кэш используется только если сеть/таблицы недоступны.
   try{
     await fetchRemote(true);
     await loadStats();
@@ -504,7 +489,6 @@ function applyData(data){
 function getCoverLink(row){
   if(!row || typeof row !== "object") return "";
 
-  // Основные названия колонок таблицы ОБЛОЖКИ.
   const preferred=[
     row.cover_url,row.coverUrl,row.cover,row.url,row.image_url,row.imageUrl,
     row.thumbnail_url,row.thumbnailUrl,row.link,row.href,row.ссылка,row.обложка
@@ -515,7 +499,6 @@ function getCoverLink(row){
     if(url)return url;
   }
 
-  // Если колонка называется иначе — ищем URL среди всех значений строки.
   for(const value of Object.values(row)){
     const url=normalizeCoverUrl(value);
     if(url)return url;
@@ -843,17 +826,13 @@ function normalizeFileUrl(value){
   let raw=String(value ?? "").trim();
   if(!raw)return "";
 
-  // Если Google Sheets вернул HTML-ссылку — берём href.
   const href=raw.match(/href\s*=\s*["']([^"']+)["']/i);
   if(href)raw=href[1];
 
-  // Если вокруг URL есть текст — извлекаем сам URL.
   const urlMatch=raw.match(/https?:\/\/[^\s<>"']+/i);
   if(urlMatch)raw=urlMatch[0];
   raw=raw.replace(/[),.;]+$/g,"");
 
-  // Файлы в таблице находятся на GitHub по /blob/main/books/...
-  // Для скачивания нужен raw.githubusercontent.com.
   const github=raw.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
   if(github){
     const owner=github[1], repo=github[2], branch=github[3];
@@ -875,8 +854,6 @@ async function downloadBook(book){
   const filename=(String(source).match(/\/([^/?#]+?)(?:\?.*)?$/)?.[1] || `${book.title||"book"}.epub`)
     .replace(/%20/g," ");
 
-  // Сначала пытаемся скачать сам файл. Это важно для GitHub: /blob/ —
-  // страница, а raw.githubusercontent.com — непосредственно EPUB.
   try{
     const response=await fetch(url,{mode:"cors",cache:"no-store"});
     if(!response.ok)throw new Error("HTTP "+response.status);
@@ -894,7 +871,6 @@ async function downloadBook(book){
     toast("EPUB скачивается");
     return;
   }catch(e){
-    // Резервный вариант для Telegram/iOS, если браузер запретил fetch.
     const t=tg();
     try{if(t?.openLink)t.openLink(url);else window.open(url,"_blank")}catch{window.open(url,"_blank")}
   }
@@ -980,6 +956,459 @@ document.getElementById("modalBox").addEventListener("click",e=>{
   }catch{}
 })();
 loadData(false).then(()=>loadStats());
+
+/* =========================
+   АДМИН-ПАНЕЛЬ
+   ========================= */
+const ADMIN_PASSWORD = "midnight2026";
+
+let adminClickCount = 0;
+let adminClickTimer = null;
+
+document.querySelector(".brand h1")?.addEventListener("click", function() {
+    adminClickCount++;
+    if (adminClickCount === 5) {
+        showAdminLogin();
+        adminClickCount = 0;
+    }
+    clearTimeout(adminClickTimer);
+    adminClickTimer = setTimeout(() => { adminClickCount = 0; }, 2000);
+});
+
+function showAdminLogin() {
+    const modal = document.getElementById("modal");
+    modal.classList.remove("hidden");
+    document.getElementById("modalBox").innerHTML = `
+        <button class="close" id="closeAdminModal">×</button>
+        <div class="section-title" style="margin-top:3px">🔐 Вход в админ-панель</div>
+        <div id="adminLoginForm">
+            <input type="password" id="adminPasswordInput" style="width:100%;padding:14px;border-radius:12px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);margin:12px 0;" placeholder="Введите пароль">
+            <button class="btn primary" id="adminLoginBtn" style="width:100%;">Войти</button>
+            <button class="btn" id="closeAdminBtn" style="width:100%;margin-top:6px;">Закрыть</button>
+        </div>
+        <div id="adminContent" style="display:none;margin-top:12px;"></div>
+    `;
+
+    document.getElementById("closeAdminModal").onclick = () => modal.classList.add("hidden");
+    document.getElementById("closeAdminBtn").onclick = () => modal.classList.add("hidden");
+
+    document.getElementById("adminLoginBtn").onclick = function() {
+        const pass = document.getElementById("adminPasswordInput").value;
+        if (pass === ADMIN_PASSWORD) {
+            document.getElementById("adminLoginForm").style.display = "none";
+            document.getElementById("adminContent").style.display = "block";
+            renderAdminPanel();
+        } else {
+            toast("❌ Неверный пароль!");
+        }
+    };
+}
+
+function closeAdminPanel() {
+    document.getElementById("modal").classList.add("hidden");
+}
+
+function renderAdminPanel() {
+    const container = document.getElementById("adminContent");
+    container.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+            <button class="btn primary" onclick="adminTab('books')">📚 Книги</button>
+            <button class="btn" onclick="adminTab('playlist')">🎵 Плейлисты</button>
+            <button class="btn" onclick="adminTab('announce')">📢 Анонсы</button>
+            <button class="btn" onclick="adminTab('stats')">📊 Статистика</button>
+        </div>
+        <div id="adminTabContent"></div>
+        <button class="btn" onclick="closeAdminPanel()" style="width:100%;margin-top:12px;">🚪 Выйти</button>
+    `;
+    adminTab("books");
+}
+
+function adminTab(tab) {
+    const container = document.getElementById("adminTabContent");
+    if (tab === "books") renderAdminBooks(container);
+    if (tab === "playlist") renderAdminPlaylists(container);
+    if (tab === "announce") renderAdminAnnounce(container);
+    if (tab === "stats") renderAdminStats(container);
+}
+
+/* ===== КНИГИ ===== */
+function renderAdminBooks(container) {
+    let html = `
+        <div style="margin-bottom:12px;">
+            <h3 style="color:var(--silver2);">📚 Книги (${state.books.length})</h3>
+            <button class="btn primary" onclick="showAddBookForm()" style="width:100%;">➕ Добавить книгу</button>
+        </div>
+        <div id="adminBookList">
+    `;
+
+    state.books.forEach(book => {
+        const quotesCount = (book.quotes && Array.isArray(book.quotes)) ? book.quotes.length : 0;
+        html += `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid rgba(201,199,200,.08);">
+                <div>
+                    <div style="color:var(--silver2);font-size:14px;">${book.cover_emoji || "📖"} ${h(book.title)}</div>
+                    <div style="color:var(--muted);font-size:12px;">${h(book.author)} · 💬 ${quotesCount} цитат</div>
+                </div>
+                <div>
+                    <button class="btn" style="padding:4px 10px;font-size:10px;" onclick="editBook(${book.id})">✏️</button>
+                    <button class="btn" style="padding:4px 10px;font-size:10px;border-color:var(--wine2);" onclick="editQuotes(${book.id})">💬</button>
+                    <button class="btn" style="padding:4px 10px;font-size:10px;border-color:var(--wine2);" onclick="deleteBook(${book.id})">🗑️</button>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+function showAddBookForm() {
+    const container = document.getElementById("adminTabContent");
+    container.innerHTML = `
+        <div style="background:rgba(13,8,11,.8);padding:16px;border-radius:12px;">
+            <h3 style="color:var(--silver2);">➕ Новая книга</h3>
+            <input type="text" id="newTitle" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Название">
+            <input type="text" id="newAuthor" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Автор">
+            <input type="text" id="newTrops" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Тропы (через запятую)">
+            <textarea id="newDescription" rows="3" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Аннотация"></textarea>
+            <input type="text" id="newCover" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Обложка (эмодзи или ссылка)">
+            <input type="text" id="newSeries" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Серия (если есть)">
+            <h4 style="color:var(--muted);margin:12px 0 6px;">💬 Цитаты (каждая с новой строки)</h4>
+            <textarea id="newQuotes" rows="3" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Цитата 1&#10;Цитата 2&#10;Цитата 3"></textarea>
+            <button class="btn primary" onclick="saveNewBookWithQuotes()" style="width:100%;margin-top:8px;">💾 Сохранить книгу</button>
+            <button class="btn" onclick="adminTab('books')" style="width:100%;margin-top:4px;">↩️ Назад</button>
+        </div>
+    `;
+}
+
+function saveNewBookWithQuotes() {
+    const quotesText = document.getElementById("newQuotes").value;
+    const quotesArray = quotesText.split('\n').map(q => q.trim()).filter(Boolean);
+
+    const newBook = {
+        id: state.books.length + 1,
+        title: document.getElementById("newTitle").value || "Без названия",
+        author: document.getElementById("newAuthor").value || "Неизвестный автор",
+        trops: document.getElementById("newTrops").value.split(",").map(t => t.trim()).filter(Boolean),
+        description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
+        cover_emoji: document.getElementById("newCover").value || "📖",
+        series: document.getElementById("newSeries").value || null,
+        series_order: null,
+        triggers: [],
+        quotes: quotesArray.join(' | '),
+        rating: 0,
+        status: "active"
+    };
+
+    state.books.push(newBook);
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+
+    toast(`✅ Книга добавлена! ${quotesArray.length} цитат сохранено.`);
+    adminTab("books");
+    render();
+}
+
+function deleteBook(id) {
+    if (!confirm("Удалить книгу?")) return;
+    state.books = state.books.filter(b => b.id !== id);
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+    toast("🗑️ Книга удалена");
+    adminTab("books");
+    render();
+}
+
+function editBook(id) {
+    const book = state.books.find(b => b.id === id);
+    if (!book) return;
+    const container = document.getElementById("adminTabContent");
+    container.innerHTML = `
+        <div style="background:rgba(13,8,11,.8);padding:16px;border-radius:12px;">
+            <h3 style="color:var(--silver2);">✏️ Редактировать: ${h(book.title)}</h3>
+            <input type="text" id="editTitle" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(book.title)}" placeholder="Название">
+            <input type="text" id="editAuthor" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(book.author)}" placeholder="Автор">
+            <input type="text" id="editTrops" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${book.trops.join(", ")}" placeholder="Тропы">
+            <textarea id="editDescription" rows="3" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Аннотация">${h(book.description)}</textarea>
+            <input type="text" id="editCover" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(book.cover_emoji)}" placeholder="Обложка">
+            <input type="text" id="editSeries" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(book.series || "")}" placeholder="Серия">
+            <button class="btn primary" onclick="saveEditBook(${id})" style="width:100%;margin-top:8px;">💾 Сохранить изменения</button>
+            <button class="btn" onclick="adminTab('books')" style="width:100%;margin-top:4px;">↩️ Назад</button>
+        </div>
+    `;
+}
+
+function saveEditBook(id) {
+    const book = state.books.find(b => b.id === id);
+    if (!book) return;
+    book.title = document.getElementById("editTitle").value || "Без названия";
+    book.author = document.getElementById("editAuthor").value || "Неизвестный автор";
+    book.trops = document.getElementById("editTrops").value.split(",").map(t => t.trim()).filter(Boolean);
+    book.description = document.getElementById("editDescription").value || "Описание пока не добавлено.";
+    book.cover_emoji = document.getElementById("editCover").value || "📖";
+    book.series = document.getElementById("editSeries").value || null;
+
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+
+    toast("✅ Изменения сохранены!");
+    adminTab("books");
+    render();
+}
+
+/* ===== ЦИТАТЫ ===== */
+function editQuotes(id) {
+    const book = state.books.find(b => b.id === id);
+    if (!book) return;
+
+    let quotesArray = [];
+    if (typeof book.quotes === 'string') {
+        quotesArray = book.quotes.split('|').map(q => q.trim()).filter(Boolean);
+    } else if (Array.isArray(book.quotes)) {
+        quotesArray = [...book.quotes];
+    }
+
+    const container = document.getElementById("adminTabContent");
+    container.innerHTML = `
+        <div style="background:rgba(13,8,11,.8);padding:16px;border-radius:12px;">
+            <h3 style="color:var(--silver2);">💬 Цитаты: ${h(book.title)}</h3>
+            <div id="quotesList">
+                ${quotesArray.length === 0 ? '<div style="color:var(--muted);padding:8px 0;">Цитат пока нет.</div>' : ''}
+                ${quotesArray.map((q, i) => `
+                    <div style="display:flex;gap:8px;align-items:center;margin:6px 0;">
+                        <span style="color:var(--muted);font-size:12px;">${i+1}.</span>
+                        <input type="text" class="quote-input" style="flex:1;padding:8px;border-radius:6px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(q)}" data-index="${i}">
+                        <button class="btn" style="padding:4px 10px;font-size:10px;border-color:var(--wine2);" onclick="removeQuote(this, ${id})">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <button class="btn" onclick="addQuoteField(${id})" style="width:100%;margin:8px 0;">➕ Добавить цитату</button>
+            <button class="btn primary" onclick="saveQuotes(${id})" style="width:100%;">💾 Сохранить все цитаты</button>
+            <button class="btn" onclick="adminTab('books')" style="width:100%;margin-top:4px;">↩️ Назад</button>
+        </div>
+    `;
+}
+
+function addQuoteField(id) {
+    const list = document.getElementById("quotesList");
+    const index = list.querySelectorAll('.quote-input').length;
+    const div = document.createElement('div');
+    div.style.cssText = "display:flex;gap:8px;align-items:center;margin:6px 0;";
+    div.innerHTML = `
+        <span style="color:var(--muted);font-size:12px;">${index+1}.</span>
+        <input type="text" class="quote-input" style="flex:1;padding:8px;border-radius:6px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" placeholder="Введите цитату..." data-index="${index}">
+        <button class="btn" style="padding:4px 10px;font-size:10px;border-color:var(--wine2);" onclick="removeQuote(this, ${id})">✕</button>
+    `;
+    list.appendChild(div);
+}
+
+function removeQuote(btn, id) {
+    const div = btn.closest('div');
+    if (div && div.parentNode) {
+        div.remove();
+        const list = document.getElementById("quotesList");
+        const items = list.querySelectorAll('div');
+        items.forEach((el, i) => {
+            const num = el.querySelector('span:first-child');
+            if (num) num.textContent = `${i+1}.`;
+        });
+    }
+}
+
+function saveQuotes(id) {
+    const book = state.books.find(b => b.id === id);
+    if (!book) return;
+
+    const inputs = document.querySelectorAll('.quote-input');
+    const quotes = [];
+    inputs.forEach(input => {
+        const text = input.value.trim();
+        if (text) quotes.push(text);
+    });
+
+    book.quotes = quotes.join(' | ');
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+
+    toast(`✅ ${quotes.length} цитат сохранено!`);
+    adminTab('books');
+    render();
+}
+
+/* ===== ПЛЕЙЛИСТЫ ===== */
+function renderAdminPlaylists(container) {
+    let html = `
+        <h3 style="color:var(--silver2);">🎵 Плейлисты</h3>
+        <div style="margin-bottom:12px;">
+            <select id="playlistBookSelect" style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);">
+                <option value="">Выберите книгу</option>
+                ${state.books.map(b => `<option value="${b.id}">${b.cover_emoji || "📖"} ${h(b.title)}</option>`).join('')}
+            </select>
+            <button class="btn primary" onclick="addTrackToPlaylist()" style="width:100%;margin-top:6px;">➕ Добавить трек</button>
+        </div>
+        <div id="playlistTracks"></div>
+    `;
+    container.innerHTML = html;
+
+    document.getElementById("playlistBookSelect").addEventListener("change", function() {
+        renderPlaylistTracks(this.value);
+    });
+}
+
+function renderPlaylistTracks(bookId) {
+    const container = document.getElementById("playlistTracks");
+    if (!bookId) {
+        container.innerHTML = '<div style="color:var(--muted);padding:12px;">Выберите книгу</div>';
+        return;
+    }
+
+    const tracks = state.playlists.filter(p => String(p.book_id) === String(bookId));
+    if (!tracks.length) {
+        container.innerHTML = '<div style="color:var(--muted);padding:12px;">Нет треков для этой книги</div>';
+        return;
+    }
+
+    container.innerHTML = tracks.map((t, i) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid rgba(201,199,200,.08);">
+            <div>
+                <div style="color:var(--silver2);font-size:14px;">${i+1}. ${h(t.track_name || "Без названия")}</div>
+                <div style="color:var(--muted);font-size:12px;">${h(t.artist || "—")}</div>
+            </div>
+            <button class="btn" style="padding:4px 10px;font-size:10px;border-color:var(--wine2);" onclick="removeTrackFromPlaylist('${t.id}')">🗑️</button>
+        </div>
+    `).join('');
+}
+
+function addTrackToPlaylist() {
+    const bookId = document.getElementById("playlistBookSelect").value;
+    if (!bookId) { toast("Выберите книгу"); return; }
+
+    const trackName = prompt("Название трека:");
+    if (!trackName) return;
+
+    const artist = prompt("Исполнитель:");
+    const url = prompt("Ссылка на аудиофайл (MP3):");
+    if (!url) { toast("Ссылка обязательна"); return; }
+
+    const newTrack = {
+        id: state.playlists.length + 1,
+        book_id: bookId,
+        track_name: trackName,
+        artist: artist || "—",
+        file_url: url,
+        mood: ""
+    };
+
+    state.playlists.push(newTrack);
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+
+    toast("✅ Трек добавлен!");
+    renderPlaylistTracks(bookId);
+}
+
+function removeTrackFromPlaylist(trackId) {
+    if (!confirm("Удалить трек?")) return;
+    state.playlists = state.playlists.filter(t => String(t.id) !== String(trackId));
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+    toast("🗑️ Трек удалён");
+    const select = document.getElementById("playlistBookSelect");
+    if (select) renderPlaylistTracks(select.value);
+}
+
+/* ===== АНОНСЫ ===== */
+function renderAdminAnnounce(container) {
+    const a = state.announcements[0] || { title: "", author: "", teaser: "", release_date: "", active: "TRUE" };
+    container.innerHTML = `
+        <div style="background:rgba(13,8,11,.8);padding:16px;border-radius:12px;">
+            <h3 style="color:var(--silver2);">📢 Анонс</h3>
+            <input type="text" id="annTitle" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(a.title)}" placeholder="Название">
+            <input type="text" id="annAuthor" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(a.author)}" placeholder="Автор">
+            <input type="text" id="annTeaser" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${h(a.teaser)}" placeholder="Тизер">
+            <input type="date" id="annDate" style="width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid rgba(201,199,200,.17);background:rgba(12,7,10,.70);color:var(--silver);" value="${a.release_date || ""}">
+            <button class="btn primary" onclick="saveAnnounce()" style="width:100%;margin-top:8px;">💾 Сохранить анонс</button>
+        </div>
+    `;
+}
+
+function saveAnnounce() {
+    state.announcements = [{
+        id: 1,
+        title: document.getElementById("annTitle").value || "Скоро",
+        author: document.getElementById("annAuthor").value || "",
+        teaser: document.getElementById("annTeaser").value || "Новая книга скоро появится.",
+        release_date: document.getElementById("annDate").value || "",
+        active: "TRUE",
+        cover_emoji: "🌙"
+    }];
+    storageSet(CACHE_KEY, {
+        books: state.books,
+        playlists: state.playlists,
+        files: state.files,
+        covers: state.covers,
+        announcements: state.announcements,
+        updatedAt: Date.now()
+    });
+    toast("✅ Анонс сохранён!");
+    adminTab("announce");
+    render();
+}
+
+/* ===== СТАТИСТИКА ===== */
+function renderAdminStats(container) {
+    let html = `<h3 style="color:var(--silver2);">📊 Статистика</h3>`;
+    state.books.forEach(book => {
+        const views = getViews(book.id);
+        const downloads = getDownloads(book.id);
+        const rating = getBookRating(book);
+        html += `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid rgba(201,199,200,.08);">
+                <div>
+                    <div style="color:var(--silver2);font-size:14px;">${book.cover_emoji || "📖"} ${h(book.title)}</div>
+                    <div style="color:var(--muted);font-size:12px;">👁️ ${views} просмотров · ⬇️ ${downloads} скачиваний · ⭐ ${rating.toFixed(1)}</div>
+                </div>
+            </div>
+        `;
+    });
+    container.innerHTML = html;
+}
 </script>
 </body>
 </html>
