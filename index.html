@@ -796,13 +796,65 @@ function closeModal(){document.getElementById("modal").classList.add("hidden");s
 document.getElementById("modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal()});
 
 /* ---------- DOWNLOAD ---------- */
+function normalizeFileUrl(value){
+  let raw=String(value ?? "").trim();
+  if(!raw)return "";
+
+  // Если Google Sheets вернул HTML-ссылку — берём href.
+  const href=raw.match(/href\s*=\s*["']([^"']+)["']/i);
+  if(href)raw=href[1];
+
+  // Если вокруг URL есть текст — извлекаем сам URL.
+  const urlMatch=raw.match(/https?:\/\/[^\s<>"']+/i);
+  if(urlMatch)raw=urlMatch[0];
+  raw=raw.replace(/[),.;]+$/g,"");
+
+  // Файлы в таблице находятся на GitHub по /blob/main/books/...
+  // Для скачивания нужен raw.githubusercontent.com.
+  const github=raw.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
+  if(github){
+    const owner=github[1], repo=github[2], branch=github[3];
+    const filePath=github[4].split('#')[0].split('?')[0];
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+  }
+
+  return escUrl(raw);
+}
+
 async function downloadBook(book){
   const f=fileFor(book.id);
-  if(!f?.file_url){toast("EPUB ещё не добавлен");return}
-  const url=escUrl(f.file_url);if(!url){toast("Некорректная ссылка EPUB");return}
+  const source=f?.file_url ?? f?.fileUrl ?? f?.url ?? "";
+  if(!source){toast("EPUB ещё не добавлен");return}
+
+  const url=normalizeFileUrl(source);
+  if(!url){toast("Некорректная ссылка EPUB");return}
+
   addDownload(book.id);
-  const t=tg();
-  try{if(t?.openLink)t.openLink(url);else window.open(url,"_blank")}catch{window.open(url,"_blank")}
+  const filename=(String(source).match(/\/([^/?#]+?)(?:\?.*)?$/)?.[1] || `${book.title||"book"}.epub`)
+    .replace(/%20/g," ");
+
+  // Сначала пытаемся скачать сам файл. Это важно для GitHub: /blob/ —
+  // страница, а raw.githubusercontent.com — непосредственно EPUB.
+  try{
+    const response=await fetch(url,{mode:"cors",cache:"no-store"});
+    if(!response.ok)throw new Error("HTTP "+response.status);
+    const blob=await response.blob();
+    const blobUrl=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=blobUrl;
+    a.download=decodeURIComponent(filename);
+    a.style.display="none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(blobUrl),1000);
+    toast("EPUB скачивается");
+    return;
+  }catch(e){
+    // Резервный вариант для Telegram/iOS, если браузер запретил fetch.
+    const t=tg();
+    try{if(t?.openLink)t.openLink(url);else window.open(url,"_blank")}catch{window.open(url,"_blank")}
+  }
 }
 
 /* ---------- TELEGRAM ---------- */
