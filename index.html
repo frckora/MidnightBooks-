@@ -200,6 +200,19 @@
     .icon-btn:active {
       transform: scale(.92);
     }
+    .admin-tab-btn {
+      position: relative;
+      transition: background .2s ease, border-color .2s ease, color .2s ease, transform .12s ease;
+    }
+    .admin-tab-btn.active {
+      background: linear-gradient(135deg, var(--wine2), var(--wine-dark));
+      border-color: rgba(201,199,200,.5);
+      color: var(--silver);
+      box-shadow: 0 0 0 1px rgba(132,48,62,.25), 0 4px 14px rgba(132,48,62,.22);
+    }
+    .admin-tab-btn.active:active {
+      transform: scale(.95);
+    }
     .admin-btn {
       display: inline-flex;
       align-items: center;
@@ -3096,43 +3109,63 @@
       );
       container.innerHTML = `
         <div class="admin-grid">
-          <button class="btn primary" onclick="adminTab('books')">
+          <button type="button" class="btn admin-tab-btn active" data-admin-tab="books">
             📚 Книги
           </button>
-          <button class="btn" onclick="adminTab('playlist')">
+          <button type="button" class="btn admin-tab-btn" data-admin-tab="playlist">
             🎵 Плейлисты
           </button>
-          <button class="btn" onclick="adminTab('announce')">
+          <button type="button" class="btn admin-tab-btn" data-admin-tab="announce">
             📢 Анонсы
           </button>
-          <button class="btn" onclick="adminTab('stats')">
+          <button type="button" class="btn admin-tab-btn" data-admin-tab="stats">
             📊 Статистика
           </button>
         </div>
         <div id="adminTabContent"></div>
-        <button class="btn" onclick="closeAdminPanel()"
+        <button type="button" class="btn" data-admin-action="close"
                 style="width:100%;margin-top:12px;">
           🚪 Выйти
         </button>
       `;
+
+      // Единый обработчик для динамических элементов админки.
+      const tabButtons = container.querySelectorAll("[data-admin-tab]");
+      tabButtons.forEach(btn => {
+        btn.addEventListener("click", () => adminTab(btn.dataset.adminTab));
+      });
+      container.onclick = e => {
+        const actionEl = e.target.closest("[data-admin-action]");
+        if (!actionEl || !container.contains(actionEl)) return;
+        const action = actionEl.dataset.adminAction;
+        const id = actionEl.dataset.bookId;
+        if (action === "close") closeAdminPanel();
+        else if (action === "edit-book") editBook(id);
+        else if (action === "edit-quotes") editQuotes(id);
+        else if (action === "delete-book") deleteBook(id);
+        else if (action === "save-edit-book") saveEditBook(id);
+        else if (action === "back-books") adminTab("books");
+        else if (action === "add-book") showAddBookForm();
+        else if (action === "save-new-book") saveNewBook();
+        else if (action === "save-quotes") saveQuotes(id);
+        else if (action === "add-quote") addQuoteField(id);
+        else if (action === "remove-quote") removeQuote(actionEl, id);
+      };
       adminTab("books");
     }
     function adminTab(tab) {
-      const container = document.getElementById(
-        "adminTabContent"
-      );
-      if (tab === "books") {
-        renderAdminBooks(container);
-      }
-      if (tab === "playlist") {
-        renderAdminPlaylists(container);
-      }
-      if (tab === "announce") {
-        renderAdminAnnounce(container);
-      }
-      if (tab === "stats") {
-        renderAdminStats(container);
-      }
+      const container = document.getElementById("adminTabContent");
+      if (!container) return;
+
+      document.querySelectorAll("#adminContent [data-admin-tab]")
+        .forEach(btn => {
+          btn.classList.toggle("active", btn.dataset.adminTab === tab);
+        });
+
+      if (tab === "books") renderAdminBooks(container);
+      if (tab === "playlist") renderAdminPlaylists(container);
+      if (tab === "announce") renderAdminAnnounce(container);
+      if (tab === "stats") renderAdminStats(container);
     }
     // ---- КНИГИ ----
     function renderAdminBooks(container) {
@@ -3141,7 +3174,7 @@
           <h3 style="color:var(--silver2);">
             📚 Книги (${state.books.length})
           </h3>
-          <button class="btn primary" onclick="showAddBookForm()"
+          <button type="button" class="btn primary" data-admin-action="add-book"
                   style="width:100%;">
             ➕ Добавить книгу
           </button>
@@ -3166,16 +3199,13 @@
               </div>
             </div>
             <div class="admin-btn-group">
-              <button class="admin-btn wine"
-                      type="button" onclick="editBook(${JSON.stringify(String(book.id))})">
+              <button type="button" class="admin-btn wine" data-admin-action="edit-book" data-book-id="${h(book.id)}">
                 ✏️
               </button>
-              <button class="admin-btn"
-                      type="button" onclick="editQuotes(${JSON.stringify(String(book.id))})">
+              <button type="button" class="admin-btn" data-admin-action="edit-quotes" data-book-id="${h(book.id)}">
                 💬
               </button>
-              <button class="admin-btn danger"
-                      type="button" onclick="deleteBook(${JSON.stringify(String(book.id))})">
+              <button type="button" class="admin-btn danger" data-admin-action="delete-book" data-book-id="${h(book.id)}">
                 🗑️
               </button>
             </div>
@@ -3211,11 +3241,11 @@
           </h4>
           <textarea id="newQuotes" class="admin-input" rows="3"
                     placeholder="Цитата 1&#10;Цитата 2&#10;Цитата 3"></textarea>
-          <button class="btn primary" onclick="saveNewBook()"
+          <button type="button" class="btn primary" data-admin-action="save-new-book"
                   style="width:100%;margin-top:8px;">
             💾 Сохранить книгу
           </button>
-          <button class="btn" onclick="adminTab('books')"
+          <button type="button" class="btn" data-admin-action="back-books"
                   style="width:100%;margin-top:4px;">
             ↩️ Назад
           </button>
@@ -3238,7 +3268,7 @@
         .map(t => t.trim())
         .filter(Boolean);
       const newBook = {
-        id: state.books.length + 1,
+        id: normalizeId(state.books.length + 1),
         title: document.getElementById("newTitle").value ||
                "Без названия",
         author: document.getElementById("newAuthor").value ||
@@ -3275,6 +3305,7 @@
       render();
     }
     function deleteBook(id) {
+      id = normalizeId(id);
       if (!confirm("Удалить книгу?")) {
         return;
       }
@@ -3324,11 +3355,11 @@
                  value="${h(book.cover_emoji)}" placeholder="Обложка">
           <input type="text" id="editSeries" class="admin-input"
                  value="${h(book.series || "")}" placeholder="Серия">
-          <button class="btn primary" onclick="saveEditBook(${id})"
+          <button type="button" class="btn primary" data-admin-action="save-edit-book" data-book-id="${h(id)}"
                   style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
-          <button class="btn" onclick="adminTab('books')"
+          <button type="button" class="btn" data-admin-action="back-books"
                   style="width:100%;margin-top:4px;">
             ↩️ Назад
           </button>
@@ -3399,22 +3430,21 @@
                 </span>
                 <input type="text" class="admin-input quote-input"
                        value="${h(q)}" style="flex:1;" data-index="${i}">
-                <button class="admin-btn danger"
-                        type="button" onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+                <button type="button" class="admin-btn danger" data-admin-action="remove-quote" data-book-id="${h(id)}">
                   ✕
                 </button>
               </div>`
             ).join('')}
           </div>
-          <button class="btn" type="button" onclick="addQuoteField(${JSON.stringify(String(id))})"
+          <button type="button" class="btn" data-admin-action="add-quote" data-book-id="${h(id)}"
                   style="width:100%;margin:8px 0;">
             ➕ Добавить цитату
           </button>
-          <button class="btn primary" type="button" onclick="saveQuotes(${JSON.stringify(String(id))})"
+          <button type="button" class="btn primary" data-admin-action="save-quotes" data-book-id="${h(id)}"
                   style="width:100%;">
             💾 Сохранить все цитаты
           </button>
-          <button class="btn" onclick="adminTab('books')"
+          <button type="button" class="btn" data-admin-action="back-books"
                   style="width:100%;margin-top:4px;">
             ↩️ Назад
           </button>
@@ -3422,6 +3452,7 @@
       `;
     }
     function addQuoteField(id) {
+      id = normalizeId(id);
       const list = document.getElementById("quotesList");
       const idx = list.querySelectorAll('.quote-input').length;
       const div = document.createElement('div');
@@ -3434,14 +3465,14 @@
         <input type="text" class="admin-input quote-input"
                placeholder="Введите цитату..." style="flex:1;"
                data-index="${idx}">
-        <button class="admin-btn danger"
-                type="button" onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+        <button type="button" class="admin-btn danger" data-admin-action="remove-quote" data-book-id="${h(id)}">
           ✕
         </button>
       `;
       list.appendChild(div);
     }
     function removeQuote(btn, id) {
+      id = normalizeId(id);
       const div = btn.closest('div');
       if (div && div.parentNode) {
         div.remove();
