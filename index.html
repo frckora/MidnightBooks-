@@ -305,6 +305,22 @@ function normalizeCoverUrl(value){
 
   raw=raw.replace(/[),.;]+$/g,"");
 
+  // GitHub: в таблице сейчас стоят ссылки вида
+  // https://github.com/frckora/MidnightBooks-/blob/main/covers/book.jpg
+  // Для <img> нужна raw-ссылка.
+  let github=raw.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
+  if(github){
+    const owner=github[1];
+    const repo=github[2];
+    const branch=github[3];
+    const filePath=github[4].split('#')[0].split('?')[0];
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+  }
+
+  // GitHub mobile/share links can occasionally arrive without /blob/.
+  let githubRaw=raw.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
+  if(githubRaw)return raw;
+
   // Google Drive: превращаем ссылку просмотра файла в прямую картинку.
   let m=raw.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
   if(m)return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w1000`;
