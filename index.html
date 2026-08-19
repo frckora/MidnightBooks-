@@ -407,12 +407,15 @@ function showLoading(){document.getElementById("main").innerHTML='<div class="lo
    ФУНКЦИЯ ДЛЯ ОБЛОЖЕК (ИСПРАВЛЕННАЯ)
    ========================= */
 function coverHTML(book, cls = "cover") {
-    // 1. Если в cover_emoji прямая ссылка на картинку
+    console.log("📸 Книга:", book.title);
+    console.log("📸 cover_emoji:", book.cover_emoji);
+    
+    // ЕСЛИ В cover_emoji ЕСТЬ ССЫЛКА — ПОКАЗЫВАЕМ КАРТИНКУ
     if (book.cover_emoji && book.cover_emoji.startsWith("http")) {
         return `<div class="${cls}"><img src="${book.cover_emoji}" alt="${book.title}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;"></div>`;
     }
     
-    // 2. Если нет — пробуем загрузить из таблицы ОБЛОЖКИ
+    // ЕСЛИ НЕТ — ИЩЕМ В ТАБЛИЦЕ ОБЛОЖКИ
     const c = state.covers.find(x => String(x.book_id ?? x.bookId) === String(book.id));
     const url = c ? (c.cover_url || c.thumbnail_url || "") : "";
     
@@ -420,7 +423,7 @@ function coverHTML(book, cls = "cover") {
         return `<div class="${cls}"><img src="${url}" alt="${book.title}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;"></div>`;
     }
     
-    // 3. Если ничего нет — показываем эмодзи
+    // ЕСЛИ НИЧЕГО НЕТ — ПОКАЗЫВАЕМ ЭМОДЗИ
     return `<div class="${cls}"><span class="cover-emoji">${book.cover_emoji || "📖"}</span></div>`;
 }
 
