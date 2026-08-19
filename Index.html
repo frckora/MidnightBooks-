@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#160D11">
+<title>MidnightBooks</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="header">
+    <div class="brand">
+      <h1 id="brandLogo">MidnightBooks</h1>
+      <div class="brand-line"></div>
+      <div class="header-actions">
+        <button class="btn primary" id="channelBtn">Перейти в канал</button>
+        <button class="btn" id="aboutBtn">О нас</button>
+        <button class="icon-btn" id="refreshBtn" title="Обновить">↻</button>
+      </div>
+    </div>
+  </header>
+  <main id="main"></main>
+</div>
+<div id="player" class="player hidden">
+  <div class="player-inner">
+    <button class="player-btn" id="prevTrack">⏮</button>
+    <div>
+      <div class="player-title" id="playerTitle">Нет трека</div>
+      <div class="player-artist" id="playerArtist">—</div>
+    </div>
+    <button class="player-btn" id="playPause">▶</button>
+    <button class="player-btn" id="nextTrack">⏭</button>
+    <div class="player-progress" id="playerProgress"><i></i></div>
+    <div class="player-time" id="playerTime">0:00 / 0:00</div>
+  </div>
+</div>
+<nav class="bottom-nav">
+  <div class="nav-inner">
+    <button class="nav-btn active" data-page="home"><span class="nav-icon">🏠</span><span class="nav-label">Главная</span></button>
+    <button class="nav-btn" data-page="catalog"><span class="nav-icon">📚</span><span class="nav-label">Каталог</span></button>
+    <button class="nav-btn" data-page="favorites"><span class="nav-icon">❤️</span><span class="nav-label">Избранное</span></button>
+    <button class="nav-btn" data-page="diary"><span class="nav-icon">📖</span><span class="nav-label">Дневник</span></button>
+  </div>
+</nav>
+<div id="modal" class="modal hidden"><div class="modal-box" id="modalBox"></div></div>
+<div id="toast" class="toast"></div>
+
+<script src="utils.js"></script>
+<script src="data.js"></script>
+<script src="stats.js"></script>
+<script src="player.js"></script>
+<script src="app.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
