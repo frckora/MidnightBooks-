@@ -281,12 +281,48 @@ function num(v,f=0){
   return Number.isFinite(n)?n:f;
 }
 function escUrl(url){
-  try{return new URL(url).href}catch{return "";}
+  try{return new URL(String(url).trim(), window.location.href).href}catch{return "";}
+}
+
+// Приводим значение из Google Sheets к прямому URL изображения.
+// Google Sheets иногда отдаёт не сам URL, а текст ссылки, HTML-ссылку
+// или формулу IMAGE(). Для карточки нужен именно адрес картинки.
+function normalizeCoverUrl(value){
+  let raw=String(value ?? "").trim();
+  if(!raw)return "";
+
+  // Формула Google Sheets: =IMAGE("https://...")
+  const imageFormula=raw.match(/=IMAGE\s*\(\s*["']([^"']+)["']/i);
+  if(imageFormula)raw=imageFormula[1];
+
+  // HTML: <a href="https://...">Обложка</a>
+  const href=raw.match(/href\s*=\s*["']([^"']+)["']/i);
+  if(href)raw=href[1];
+
+  // Если в ячейке остался текст вокруг URL — достаём сам URL.
+  const urlMatch=raw.match(/https?:\/\/[^\s<>"']+/i);
+  if(urlMatch)raw=urlMatch[0];
+
+  raw=raw.replace(/[),.;]+$/g,"");
+
+  // Google Drive: превращаем ссылку просмотра файла в прямую картинку.
+  let m=raw.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
+  if(m)return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w1000`;
+
+  m=raw.match(/drive\.google\.com\/(?:open\?id=|uc\?(?:export=download&)?id=)([^&]+)/i);
+  if(m)return `https://drive.google.com/thumbnail?id=${encodeURIComponent(m[1])}&sz=w1000`;
+
+  return escUrl(raw);
+}
+function normalizeId(value){
+  return String(value ?? "")
+    .trim()
+    .replace(/^0+(?=\d)/, "");
 }
 function normalizeBook(b,i){
   return {
     ...b,
-    id:String(b.id??i+1),
+    id:normalizeId(b.id??i+1),
     title:String(b.title??"Без названия"),
     author:String(b.author??"Неизвестный автор"),
     series:String(b.series??""),
@@ -375,63 +411,147 @@ function unwrap(data){
 }
 async function loadData(force=false){
   const cached=storageGet(CACHE_KEY,null);
-  if(!force && cached && cached.books?.length){
-    state.books=cached.books.map(normalizeBook);
-    state.playlists=cached.playlists||[];state.files=cached.files||[];state.covers=cached.covers||[];state.announcements=cached.announcements||[];
-    render(); fetchRemote(true).catch(()=>{});
+
+  if(force){
+    await fetchRemote(false);
     return;
   }
-  await fetchRemote(false);
-}
-async function fetchRemote(silent){
-  if(!silent) showLoading();
+
+  // Сначала пробуем получить свежие данные.
+  // Кэш используется только если сеть/таблицы недоступны.
   try{
-    const keys=["books","playlists","files","covers","announcements"];
-    const results=await Promise.all(keys.map(k=>fetchJSON(SHEETS[k])));
-    state.books=unwrap(results[0]).map(normalizeBook);
-    state.playlists=unwrap(results[1]);state.files=unwrap(results[2]);state.covers=unwrap(results[3]);state.announcements=unwrap(results[4]);
-    if(!state.books.length)throw new Error("empty");
-    storageSet(CACHE_KEY,{books:state.books,playlists:state.playlists,files:state.files,covers:state.covers,announcements:state.announcements,updatedAt:Date.now()});
-    render();toast("Библиотека обновлена");
-  }catch(e){
-    if(!state.books.length){
+    await fetchRemote(true);
+  }catch{
+    if(cached && cached.books?.length){
+      applyData(cached);
+      render();
+      toast("Показан сохранённый кэш");
+    }else{
       state.books=[];state.playlists=[];state.files=[];state.covers=[];state.announcements=[];
       render();
       toast("В таблице КНИГИ пока нет данных");
-    }else if(!silent)toast("Не удалось обновить данные — показан кэш");
+    }
   }
 }
+
+function applyData(data){
+  state.books=unwrap(data.books||[]).map(normalizeBook);
+  state.playlists=unwrap(data.playlists||[]);
+  state.files=unwrap(data.files||[]);
+  state.covers=unwrap(data.covers||[]);
+  state.announcements=unwrap(data.announcements||[]);
+  mergeCoversIntoBooks();
+}
+
+function getCoverLink(row){
+  if(!row || typeof row !== "object") return "";
+
+  // Основные названия колонок таблицы ОБЛОЖКИ.
+  const preferred=[
+    row.cover_url,row.coverUrl,row.cover,row.url,row.image_url,row.imageUrl,
+    row.thumbnail_url,row.thumbnailUrl,row.link,row.href,row.ссылка,row.обложка
+  ];
+
+  for(const value of preferred){
+    const url=normalizeCoverUrl(value);
+    if(url)return url;
+  }
+
+  // Если колонка называется иначе — ищем URL среди всех значений строки.
+  for(const value of Object.values(row)){
+    const url=normalizeCoverUrl(value);
+    if(url)return url;
+  }
+  return "";
+}
+
+function mergeCoversIntoBooks(){
+  const coverMap=new Map();
+
+  state.covers.forEach(c=>{
+    const id=normalizeId(c.book_id ?? c.bookId ?? c.book ?? c.id);
+    if(!id)return;
+
+    const url=getCoverLink(c);
+    if(url) coverMap.set(id,url);
+  });
+
+  state.books=state.books.map(book=>({
+    ...book,
+    cover_url:coverMap.get(normalizeId(book.id)) || ""
+  }));
+}
+
+
+async function fetchRemote(silent=false){
+  if(!silent) showLoading();
+
+  const keys=["books","playlists","files","covers","announcements"];
+  const results=await Promise.all(keys.map(k=>fetchJSON(SHEETS[k])));
+
+  const data={
+    books:unwrap(results[0]),
+    playlists:unwrap(results[1]),
+    files:unwrap(results[2]),
+    covers:unwrap(results[3]),
+    announcements:unwrap(results[4])
+  };
+
+  if(!data.books.length)throw new Error("empty");
+
+  applyData(data);
+
+  storageSet(CACHE_KEY,{
+    books:state.books,
+    playlists:state.playlists,
+    files:state.files,
+    covers:state.covers,
+    announcements:state.announcements,
+    updatedAt:Date.now()
+  });
+
+  render();
+  if(!silent)toast("Библиотека обновлена");
+}
+
 function showLoading(){document.getElementById("main").innerHTML='<div class="loading">Загружаем библиотеку…</div>'}
 
 /* =========================
-   ФУНКЦИЯ ДЛЯ ОБЛОЖЕК (ИСПРАВЛЕННАЯ)
+   ОБЛОЖКИ
    ========================= */
-function coverHTML(book, cls = "cover") {
-    console.log("📸 Книга:", book.title);
-    console.log("📸 cover_emoji:", book.cover_emoji);
-    
-    // ЕСЛИ В cover_emoji ЕСТЬ ССЫЛКА — ПОКАЗЫВАЕМ КАРТИНКУ
-    if (book.cover_emoji && book.cover_emoji.startsWith("http")) {
-        return `<div class="${cls}"><img src="${book.cover_emoji}" alt="${book.title}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;"></div>`;
-    }
-    
-    // ЕСЛИ НЕТ — ИЩЕМ В ТАБЛИЦЕ ОБЛОЖКИ
-    const c = state.covers.find(x => String(x.book_id ?? x.bookId) === String(book.id));
-    const url = c ? (c.cover_url || c.thumbnail_url || "") : "";
-    
-    if (url) {
-        return `<div class="${cls}"><img src="${url}" alt="${book.title}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;"></div>`;
-    }
-    
-    // ЕСЛИ НИЧЕГО НЕТ — ПОКАЗЫВАЕМ ЭМОДЗИ
-    return `<div class="${cls}"><span class="cover-emoji">${book.cover_emoji || "📖"}</span></div>`;
+function getCover(book){
+  if(!book)return null;
+  const bookId=normalizeId(book.id);
+  if(book.cover_url) return {cover_url:book.cover_url};
+
+  const row=state.covers.find(c=>
+    normalizeId(c.book_id ?? c.bookId ?? c.book ?? c.id)===bookId
+  );
+  const url=getCoverLink(row);
+  return url ? {cover_url:url} : null;
 }
 
-/* ---------- COVERS / BOOK DATA ---------- */
-function coverFor(book){
-  const c=state.covers.find(x=>String(x.book_id??x.bookId)===String(book.id));
-  return c ? (c.cover_url||c.thumbnail_url||"") : "";
+
+function coverHTML(book, cls="cover"){
+  const c=getCover(book);
+  const imageUrl=normalizeCoverUrl(c?.cover_url || c?.thumbnail_url || "");
+
+  if(imageUrl){
+    return `<div class="${cls}">
+      <img
+        src="${h(imageUrl)}"
+        alt="${h(book.title||"Обложка")}"
+        loading="lazy"
+        referrerpolicy="no-referrer"
+        onerror="this.onerror=null;this.src='';this.style.display='none';this.nextElementSibling.classList.remove('hidden')"
+      >
+      <span class="cover-fallback cover-emoji hidden">${h(book.cover_emoji||"📖")}</span>
+    </div>`;
+  }
+
+  return `<div class="${cls}"><span class="cover-emoji">${h(book.cover_emoji||"📖")}</span></div>`;
 }
+
 function tracksFor(bookId){
   return state.playlists.filter(x=>String(x.book_id??x.bookId)===String(bookId))
     .map(x=>({name:String(x.track_name??x.name??"Без названия"),artist:String(x.artist??"—"),url:String(x.file_url??x.url??"")}));
