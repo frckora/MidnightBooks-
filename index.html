@@ -1205,7 +1205,7 @@
       announcements: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/АНОНСЫ"
     };
     const STATS_API =
-      "https://script.google.com/macros/s/AKfycbwefIzQhdYwfIXTFKHdHUMC0Xj6C_lolyQ-w0qbx5S97XioQEykXNMfw2rsgN6JcPhO7g/exec";
+      "https://script.google.com/macros/s/AKfycbxEWrVwuPksBX7f0fYR2b6kA6wdkAb5vZcxZtL_By4iMDrlzw7yFWcL_VpT0qD5uKOLFA/exec";
     const CACHE_KEY = "midnightbooks_cache_v2";
     const ADMIN_PASSWORD = "midnight2026";
 
@@ -3097,18 +3097,47 @@
     }
     function apiPost(payload) {
       return new Promise((resolve, reject) => {
-        if (!apiReady()) { reject(new Error('Не настроен URL Apps Script')); return; }
+        if (!apiReady()) {
+          reject(new Error('Не настроен URL Apps Script'));
+          return;
+        }
         const iframeName = 'mbApiFrame_' + Date.now() + '_' + Math.random().toString(36).slice(2);
         const iframe = document.createElement('iframe');
-        iframe.name = iframeName; iframe.style.display = 'none';
+        iframe.name = iframeName;
+        iframe.style.display = 'none';
         document.body.appendChild(iframe);
+
         const form = document.createElement('form');
-        form.method = 'POST'; form.action = STATS_API; form.target = iframeName; form.style.display = 'none';
+        form.method = 'POST';
+        form.action = STATS_API;
+        form.target = iframeName;
+        form.enctype = 'application/x-www-form-urlencoded';
+        form.style.display = 'none';
+
         const input = document.createElement('input');
-        input.type = 'hidden'; input.name = 'data'; input.value = JSON.stringify(payload);
-        form.appendChild(input); document.body.appendChild(form);
-        form.submit();
-        setTimeout(() => { form.remove(); iframe.remove(); resolve({ok:true}); }, 1800);
+        input.type = 'hidden';
+        input.name = 'data';
+        input.value = JSON.stringify(payload);
+        form.appendChild(input);
+        document.body.appendChild(form);
+
+        try {
+          form.submit();
+        } catch (e) {
+          form.remove();
+          iframe.remove();
+          reject(e);
+          return;
+        }
+
+        // Google Apps Script отвечает внутри iframe.
+        // Читать ответ из другого домена браузер не позволяет, поэтому
+        // ждём завершения запроса и считаем POST отправленным.
+        setTimeout(() => {
+          form.remove();
+          iframe.remove();
+          resolve({ok:true, sent:true});
+        }, 2500);
       });
     }
     function normalizeAdminId(id) { return String(id ?? '').trim(); }
@@ -3222,12 +3251,20 @@
     async function saveNewBook() {
       try {
         const triggersArray = document.getElementById("newTriggers").value.split(',').map(t=>t.trim()).filter(Boolean);
+        const quotesArray = document.getElementById("newQuotes").value
+          .split(/\n+/)
+          .map(q => q.trim())
+          .filter(Boolean);
         const newBook = {
-          id: "book_" + Date.now() + "_" + Math.random().toString(36).slice(2,8), title: document.getElementById("newTitle").value || "Без названия",
+          id: "book_" + Date.now() + "_" + Math.random().toString(36).slice(2,8),
+          title: document.getElementById("newTitle").value || "Без названия",
           author: document.getElementById("newAuthor").value || "Неизвестный автор",
           trops: document.getElementById("newTrops").value.split(",").map(t=>t.trim()).filter(Boolean),
-          triggers: triggersArray, description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
-          cover_emoji: document.getElementById("newCover").value || "📖", series: document.getElementById("newSeries").value || null,
+          triggers: triggersArray,
+          quotes: quotesArray,
+          description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
+          cover_emoji: document.getElementById("newCover").value || "📖",
+          series: document.getElementById("newSeries").value || null,
           rating:0, status:"active"
         };
         await apiPost({action:'add_book', book:newBook});
