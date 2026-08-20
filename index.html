@@ -1205,7 +1205,7 @@
       announcements: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/АНОНСЫ"
     };
     const STATS_API =
-      "https://script.google.com/macros/s/AKfycbxEWrVwuPksBX7f0fYR2b6kA6wdkAb5vZcxZtL_By4iMDrlzw7yFWcL_VpT0qD5uKOLFA/exec";
+      "https://script.google.com/macros/s/AKfycbwefIzQhdYwfIXTFKHdHUMC0Xj6C_lolyQ-w0qbx5S97XioQEykXNMfw2rsgN6JcPhO7g/exec";
     const CACHE_KEY = "midnightbooks_cache_v2";
     const ADMIN_PASSWORD = "midnight2026";
 
@@ -1541,8 +1541,11 @@
       if (!url) {
         throw new Error("missing URL");
       }
-      const r = await fetch(url, {
-        cache: "no-store"
+      const join = String(url).includes("?") ? "&" : "?";
+      const finalUrl = String(url) + join + "t=" + Date.now();
+      const r = await fetch(finalUrl, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" }
       });
       if (!r.ok) {
         throw new Error("HTTP " + r.status);
@@ -3121,24 +3124,51 @@
         form.appendChild(input);
         document.body.appendChild(form);
 
+        let finished = false;
+        const finish = (ok, error) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          try { form.remove(); } catch {}
+          try { iframe.remove(); } catch {}
+          if (ok) resolve({ok:true});
+          else reject(new Error(error || 'Apps Script не подтвердил сохранение'));
+        };
+
+        const timer = setTimeout(() => {
+          /*
+           * POST в Apps Script выполняется внутри скрытого iframe, поэтому
+           * браузер не может прочитать его cross-origin ответ. Сам факт
+           * завершения формы не является доказательством записи.
+           * Вызывающий код после этого перечитывает Google Sheets и проверяет
+           * фактический результат.
+           */
+          finish(true);
+        }, 2200);
+
         try {
           form.submit();
         } catch (e) {
-          form.remove();
-          iframe.remove();
-          reject(e);
-          return;
+          finish(false, e.message || 'Не удалось отправить данные');
         }
-
-        // Google Apps Script отвечает внутри iframe.
-        // Читать ответ из другого домена браузер не позволяет, поэтому
-        // ждём завершения запроса и считаем POST отправленным.
-        setTimeout(() => {
-          form.remove();
-          iframe.remove();
-          resolve({ok:true, sent:true});
-        }, 2500);
       });
+    }
+
+    async function refreshFromSheetsAfterWrite(checkFn, attempts = 5) {
+      let lastError = null;
+      for (let i = 0; i < attempts; i++) {
+        try {
+          await new Promise(r => setTimeout(r, i === 0 ? 1200 : 1400));
+          await fetchRemote(true);
+          if (!checkFn || checkFn()) {
+            return true;
+          }
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (lastError) throw lastError;
+      return false;
     }
     function normalizeAdminId(id) { return String(id ?? '').trim(); }
     function persistLocal() {
@@ -3191,15 +3221,15 @@
             </div>
             <div class="admin-btn-group">
               <button class="admin-btn wine"
-                      onclick='editBook(${JSON.stringify(String(book.id))})' >
+                      onclick="editBook(${JSON.stringify(String(book.id))})">
                 ✏️
               </button>
               <button class="admin-btn"
-                      onclick='editQuotes(${JSON.stringify(String(book.id))})' >
+                      onclick="editQuotes(${JSON.stringify(String(book.id))})">
                 💬
               </button>
               <button class="admin-btn danger"
-                      onclick='deleteBook(${JSON.stringify(String(book.id))})' >
+                      onclick="deleteBook(${JSON.stringify(String(book.id))})">
                 🗑️
               </button>
             </div>
@@ -3251,7 +3281,7 @@
     async function saveNewBook() {
       try {
         const triggersArray = document.getElementById("newTriggers").value.split(',').map(t=>t.trim()).filter(Boolean);
-        const quotesArray = document.getElementById("newQuotes").value
+        const quotes = document.getElementById('newQuotes').value
           .split(/\n+/)
           .map(q => q.trim())
           .filter(Boolean);
@@ -3261,20 +3291,31 @@
           author: document.getElementById("newAuthor").value || "Неизвестный автор",
           trops: document.getElementById("newTrops").value.split(",").map(t=>t.trim()).filter(Boolean),
           triggers: triggersArray,
-          quotes: quotesArray,
           description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
           cover_emoji: document.getElementById("newCover").value || "📖",
           series: document.getElementById("newSeries").value || null,
-          rating:0, status:"active"
+          quotes: quotes,
+          rating:0,
+          status:"active"
         };
         await apiPost({action:'add_book', book:newBook});
         const id = normalizeAdminId(newBook.id);
-        state.books.push(newBook); persistLocal();
+        toast('⏳ Проверяю сохранение в Google Таблице…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => state.books.some(b => normalizeAdminId(b.id) === id)
+        );
+        if (!saved) throw new Error('Google Таблица не подтвердила сохранение книги');
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
-          toast('⏳ Загружаю EPUB…'); await uploadEpub(id, fileInput);
+          toast('⏳ Загружаю EPUB…');
+          await uploadEpub(id, fileInput);
+          await refreshFromSheetsAfterWrite(
+            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
+          );
           toast('✅ Книга и EPUB сохранены');
-        } else toast('✅ Книга сохранена в Google Таблицу');
+        } else {
+          toast('✅ Книга сохранена в Google Таблицу');
+        }
         adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
@@ -3323,7 +3364,7 @@
                  value="${h(book.series || "")}" placeholder="Серия">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
           <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
-          <button class="btn primary" onclick='saveEditBook(${JSON.stringify(String(id))})' 
+          <button class="btn primary" onclick="saveEditBook(${JSON.stringify(String(id))})"
                   style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
@@ -3349,9 +3390,25 @@
           series:document.getElementById('editSeries').value||null
         };
         await apiPost({action:'update_book', book:data});
-        Object.assign(book,data); persistLocal();
+        toast('⏳ Проверяю сохранение изменений…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => {
+            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            return !!current &&
+              current.title === data.title &&
+              current.author === data.author &&
+              current.description === data.description;
+          }
+        );
+        if (!saved) throw new Error('Google Таблица не подтвердила изменение книги');
         const fileInput=document.getElementById('editEpub');
-        if(fileInput?.files?.length){ toast('⏳ Загружаю новый EPUB…'); await uploadEpub(id,fileInput); }
+        if(fileInput?.files?.length){
+          toast('⏳ Загружаю новый EPUB…');
+          await uploadEpub(id,fileInput);
+          await refreshFromSheetsAfterWrite(
+            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
+          );
+        }
         toast('✅ Изменения сохранены в Google Таблицу'); adminTab('books'); render();
       } catch(e){ toast('❌ '+(e.message||'Не удалось сохранить')); }
     }
@@ -3386,17 +3443,17 @@
                 <input type="text" class="admin-input quote-input"
                        value="${h(q)}" style="flex:1;" data-index="${i}">
                 <button class="admin-btn danger"
-                        onclick='removeQuote(this, ${JSON.stringify(String(id))})' >
+                        onclick="removeQuote(this, ${JSON.stringify(String(id))})">
                   ✕
                 </button>
               </div>`
             ).join('')}
           </div>
-          <button class="btn" onclick='addQuoteField(${JSON.stringify(String(id))})' 
+          <button class="btn" onclick="addQuoteField(${JSON.stringify(String(id))})"
                   style="width:100%;margin:8px 0;">
             ➕ Добавить цитату
           </button>
-          <button class="btn primary" onclick='saveQuotes(${JSON.stringify(String(id))})' 
+          <button class="btn primary" onclick="saveQuotes(${id})"
                   style="width:100%;">
             💾 Сохранить все цитаты
           </button>
@@ -3421,7 +3478,7 @@
                placeholder="Введите цитату..." style="flex:1;"
                data-index="${idx}">
         <button class="admin-btn danger"
-                onclick='removeQuote(this, ${JSON.stringify(String(id))})' >
+                onclick="removeQuote(this, ${JSON.stringify(String(id))})">
           ✕
         </button>
       `;
@@ -3447,7 +3504,18 @@
       const quotes=[...document.querySelectorAll('.quote-input')].map(x=>x.value.trim()).filter(Boolean);
       try {
         await apiPost({action:'update_book', book:{id:id, quotes:quotes}});
-        book.quotes=quotes; persistLocal(); toast(`✅ ${quotes.length} цитат сохранено`); adminTab('books'); render();
+        toast('⏳ Проверяю цитаты в Google Таблице…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => {
+            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            const currentQuotes = Array.isArray(current?.quotes) ? current.quotes : arr(current?.quotes);
+            return JSON.stringify(currentQuotes) === JSON.stringify(quotes);
+          }
+        );
+        if (!saved) throw new Error('Цитаты не появились в Google Таблице');
+        const current = state.books.find(b => normalizeAdminId(b.id) === id);
+        if (current) current.quotes = quotes;
+        toast(`✅ ${quotes.length} цитат сохранено`); adminTab('books'); render();
       } catch(e){ toast('❌ '+(e.message||'Ошибка сохранения цитат')); }
     }
     // ---- ПЛЕЙЛИСТЫ ----
