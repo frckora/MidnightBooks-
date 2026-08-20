@@ -1204,7 +1204,8 @@
       covers: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/ОБЛОЖКИ",
       announcements: "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8/АНОНСЫ"
     };
-    const STATS_API = "https://script.google.com/macros/s/AKfycbwRnV3aMzJKMypAFWODHNsQmtcRnghw9xNJf3lZLOqEGCimILazsEyCUEP2PiHniWf56w/exec";
+    const STATS_API =
+      "https://script.google.com/macros/s/AKfycbwefIzQhdYwfIXTFKHdHUMC0Xj6C_lolyQ-w0qbx5S97XioQEykXNMfw2rsgN6JcPhO7g/exec";
     const CACHE_KEY = "midnightbooks_cache_v2";
     const ADMIN_PASSWORD = "midnight2026";
 
@@ -3161,15 +3162,15 @@
             </div>
             <div class="admin-btn-group">
               <button class="admin-btn wine"
-                      onclick="editBook(${JSON.stringify(String(book.id))})">
+                      onclick='editBook(${JSON.stringify(String(book.id))})' >
                 ✏️
               </button>
               <button class="admin-btn"
-                      onclick="editQuotes(${JSON.stringify(String(book.id))})">
+                      onclick='editQuotes(${JSON.stringify(String(book.id))})' >
                 💬
               </button>
               <button class="admin-btn danger"
-                      onclick="deleteBook(${JSON.stringify(String(book.id))})">
+                      onclick='deleteBook(${JSON.stringify(String(book.id))})' >
                 🗑️
               </button>
             </div>
@@ -3285,7 +3286,7 @@
                  value="${h(book.series || "")}" placeholder="Серия">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
           <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
-          <button class="btn primary" onclick="saveEditBook(${JSON.stringify(String(id))})"
+          <button class="btn primary" onclick='saveEditBook(${JSON.stringify(String(id))})' 
                   style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
@@ -3348,17 +3349,17 @@
                 <input type="text" class="admin-input quote-input"
                        value="${h(q)}" style="flex:1;" data-index="${i}">
                 <button class="admin-btn danger"
-                        onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+                        onclick='removeQuote(this, ${JSON.stringify(String(id))})' >
                   ✕
                 </button>
               </div>`
             ).join('')}
           </div>
-          <button class="btn" onclick="addQuoteField(${JSON.stringify(String(id))})"
+          <button class="btn" onclick='addQuoteField(${JSON.stringify(String(id))})' 
                   style="width:100%;margin:8px 0;">
             ➕ Добавить цитату
           </button>
-          <button class="btn primary" onclick="saveQuotes(${id})"
+          <button class="btn primary" onclick='saveQuotes(${JSON.stringify(String(id))})' 
                   style="width:100%;">
             💾 Сохранить все цитаты
           </button>
@@ -3383,7 +3384,7 @@
                placeholder="Введите цитату..." style="flex:1;"
                data-index="${idx}">
         <button class="admin-btn danger"
-                onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+                onclick='removeQuote(this, ${JSON.stringify(String(id))})' >
           ✕
         </button>
       `;
