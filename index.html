@@ -1197,11 +1197,9 @@
   <div id="toast" class="toast"></div>
   <script>
     "use strict";
-    const SHEETS = 
-      "https://opensheet.elk.sh/1-sr4yfsUXDc4m_5jl1ugVy3XLH4refVGwV2RTSDKUg8"
-    
+    const SHEETS = {};
     const STATS_API =
-      "https://script.google.com/macros/s/AKfycbxaoCpUy7QfLCC1yb5FU1P_1YU_p8z3V-5P9QQaS0ekBYdebL3elMBnxaPs9edEYvs7yQ/exec";
+      "https://script.google.com/macros/s/AKfycbzm1LbTu3ezEnGVfnxQW7gBPw7UFmqmdYBV9Aw8YfEmFnMu2cZ9RTAq8VwKjqcHZbeqpA/exec";
     const CACHE_KEY = "midnightbooks_cache_v3";
     const ADMIN_PASSWORD = "midnight2026";
 
@@ -1713,57 +1711,25 @@
       );
     }
     async function fetchRemote(silent = false) {
-      if (!silent) {
-        showLoading();
-      }
-
-      // КНИГИ — обязательный лист. Дополнительные листы не должны
-      // ломать всю библиотеку, если один из них отсутствует или ещё
-      // не опубликован.
-      const keys = [
-        "books",
-        "playlists",
-        "files",
-        "covers",
-        "announcements"
-      ];
-
-      const results = await Promise.all(
-        keys.map(async k => {
-          try {
-            return unwrap(await fetchJSON(SHEETS[k]));
-          } catch (e) {
-            console.warn("Не удалось загрузить лист:", k, e);
-            return [];
-          }
-        })
-      );
-
-      const data = {
-        books: results[0],
-        playlists: results[1],
-        files: results[2],
-        covers: results[3],
-        announcements: results[4]
-      };
-
-      if (!data.books.length) {
-        throw new Error("Не удалось получить данные листа КНИГИ");
-      }
-
-      applyData(data);
+      if (!silent) showLoading();
+      const url = STATS_API + (STATS_API.includes('?') ? '&' : '?') + 'action=data&t=' + Date.now();
+      const data = await fetchJSON(url);
+      if (!data || data.ok === false) throw new Error(data?.error || 'Apps Script не вернул данные');
+      if (!Array.isArray(data.books)) throw new Error('Apps Script не вернул лист КНИГИ');
+      applyData({
+        books: data.books,
+        playlists: data.playlists || [],
+        files: data.files || [],
+        covers: data.covers || [],
+        announcements: data.announcements || []
+      });
       storageSet(CACHE_KEY, {
-        books: state.books,
-        playlists: state.playlists,
-        files: state.files,
-        covers: state.covers,
-        announcements: state.announcements,
-        updatedAt: Date.now()
+        books: state.books, playlists: state.playlists, files: state.files,
+        covers: state.covers, announcements: state.announcements, updatedAt: Date.now()
       });
       render();
-      if (!silent) {
-        toast("Библиотека обновлена");
-      }
+      if (!silent) toast('Библиотека обновлена');
+      return data;
     }
     function showLoading() {
       document.getElementById("main").innerHTML =
@@ -3247,10 +3213,12 @@
     async function saveNewBookFull() {
       try {
         const data = collectBookForm('new');
-        const result = await apiPost({action:'add_book',book:data});
-        const id = normalizeAdminId(result.id || data.id || ('book_' + Date.now()));
-        // Если сервер сгенерировал ID, сразу обновляем запись корректным ID только если нужно.
-        if (!result.id) throw new Error('Apps Script не вернул ID книги');
+        // ID создаём ДО отправки. POST в Apps Script идёт через скрытый iframe,
+        // поэтому браузер не может прочитать его cross-origin JSON-ответ.
+        // После записи мы проверяем эту же книгу через GET /action=data.
+        data.id = 'book_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+        const id = normalizeAdminId(data.id);
+        await apiPost({action:'add_book',book:data});
         toast('⏳ Проверяю книгу в Google Таблице…');
         if (!await refreshFromSheetsAfterWrite(() => state.books.some(b=>normalizeAdminId(b.id)===id))) throw new Error('Google Таблица не подтвердила книгу');
         if (document.getElementById('newCoverFile')?.files?.length) {
