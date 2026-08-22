@@ -3210,15 +3210,15 @@
             </div>
             <div class="admin-btn-group">
               <button class="admin-btn wine"
-                      onclick="window.editBook(${JSON.stringify(getAdminBookId(book))})">
+                      data-edit-book="${h(getAdminBookId(book))}" onclick="return false;">
                 ✏️
               </button>
               <button class="admin-btn"
-                      onclick="window.editQuotes(${JSON.stringify(getAdminBookId(book))})">
+                      data-quotes-book="${h(getAdminBookId(book))}" onclick="return false;">
                 💬
               </button>
               <button class="admin-btn danger"
-                      onclick="window.deleteBook(${JSON.stringify(getAdminBookId(book))})">
+                      data-delete-book="${h(getAdminBookId(book))}" onclick="return false;">
                 🗑️
               </button>
             </div>
@@ -3227,6 +3227,30 @@
       });
       html += `</div>`;
       container.innerHTML = html;
+
+      // Надёжный обработчик для Telegram WebView: не полагаемся
+      // только на inline onclick.
+      container.querySelectorAll('[data-edit-book]').forEach(btn => {
+        btn.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          editBook(this.dataset.editBook);
+        });
+      });
+      container.querySelectorAll('[data-quotes-book]').forEach(btn => {
+        btn.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          editQuotes(this.dataset.quotesBook);
+        });
+      });
+      container.querySelectorAll('[data-delete-book]').forEach(btn => {
+        btn.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          deleteBook(this.dataset.deleteBook);
+        });
+      });
     }
     function showAddBookForm() {
       const container = document.getElementById(
@@ -3337,10 +3361,17 @@
         toast('🗑️ Книга удалена из Google Таблицы'); adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Ошибка удаления')); }
     }
+    function findAdminBook(id) {
+      const wanted = normalizeAdminId(id);
+      return state.books.find(b => getAdminBookId(b) === wanted);
+    }
+
     function editBook(id) {
       id = normalizeAdminId(id);
-      const book = state.books.find(b => getAdminBookId(b) === id);
+      const book = findAdminBook(id);
       if (!book) {
+        toast('❌ Не удалось найти книгу для редактирования');
+        console.error('MidnightBooks editBook: book not found', id, state.books);
         return;
       }
       const container = document.getElementById(
@@ -3441,8 +3472,9 @@
     // ---- ЦИТАТЫ ----
     function editQuotes(id) {
       id=normalizeAdminId(id);
-      const book = state.books.find(b => getAdminBookId(b) === id);
+      const book = findAdminBook(id);
       if (!book) {
+        toast('❌ Не удалось найти книгу');
         return;
       }
       let qArr = Array.isArray(book.quotes)
@@ -3701,6 +3733,7 @@
     window.deleteBook = deleteBook;
     window.showAddBookForm = showAddBookForm;
     window.adminTab = adminTab;
+    window.findAdminBook = findAdminBook;
   </script>
 </body>
 </html>
