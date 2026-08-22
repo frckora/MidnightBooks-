@@ -3151,6 +3151,7 @@
       return false;
     }
     function normalizeAdminId(id) { return String(id ?? '').trim(); }
+    function getAdminBookId(book) { return normalizeAdminId(book?.id ?? book?.book_id ?? book?.bookId); }
     function persistLocal() {
       storageSet(CACHE_KEY, { books:state.books, playlists:state.playlists, files:state.files, covers:state.covers, announcements:state.announcements, updatedAt:Date.now() });
     }
@@ -3209,15 +3210,15 @@
             </div>
             <div class="admin-btn-group">
               <button class="admin-btn wine"
-                      onclick="editBook(${JSON.stringify(String(book.id))})">
+                      onclick="window.editBook(${JSON.stringify(getAdminBookId(book))})">
                 ✏️
               </button>
               <button class="admin-btn"
-                      onclick="editQuotes(${JSON.stringify(String(book.id))})">
+                      onclick="window.editQuotes(${JSON.stringify(getAdminBookId(book))})">
                 💬
               </button>
               <button class="admin-btn danger"
-                      onclick="deleteBook(${JSON.stringify(String(book.id))})">
+                      onclick="window.deleteBook(${JSON.stringify(getAdminBookId(book))})">
                 🗑️
               </button>
             </div>
@@ -3304,14 +3305,14 @@
         const id = normalizeAdminId(newBook.id);
         toast('⏳ Проверяю сохранение в Google Таблице…');
         const saved = await refreshFromSheetsAfterWrite(
-          () => state.books.some(b => normalizeAdminId(b.id) === id)
+          () => state.books.some(b => getAdminBookId(b) === id)
         );
         if (!saved) throw new Error('Google Таблица не подтвердила сохранение книги');
         const coverInput = document.getElementById('newCoverFile');
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
           await uploadCover(id, coverInput);
-          await refreshFromSheetsAfterWrite(() => state.books.some(b => normalizeAdminId(b.id) === id && !!b.cover_url));
+          await refreshFromSheetsAfterWrite(() => state.books.some(b => getAdminBookId(b) === id && !!b.cover_url));
         }
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
@@ -3332,13 +3333,13 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-        state.books = state.books.filter(b=>normalizeAdminId(b.id)!==id); persistLocal();
+        state.books = state.books.filter(b=>getAdminBookId(b)!==id); persistLocal();
         toast('🗑️ Книга удалена из Google Таблицы'); adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Ошибка удаления')); }
     }
     function editBook(id) {
       id = normalizeAdminId(id);
-      const book = state.books.find(b => normalizeAdminId(b.id) === id);
+      const book = state.books.find(b => getAdminBookId(b) === id);
       if (!book) {
         return;
       }
@@ -3380,7 +3381,7 @@
                  value="${h(book.release_date || "")}">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
           <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
-          <button class="btn primary" onclick="saveEditBook(${JSON.stringify(String(id))})"
+          <button class="btn primary" onclick="window.saveEditBook(${JSON.stringify(String(id))})"
                   style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
@@ -3412,7 +3413,7 @@
         toast('⏳ Проверяю сохранение изменений…');
         const saved = await refreshFromSheetsAfterWrite(
           () => {
-            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            const current = state.books.find(b => getAdminBookId(b) === id);
             return !!current &&
               current.title === data.title &&
               current.author === data.author &&
@@ -3424,7 +3425,7 @@
         if(coverInput?.files?.length){
           toast('⏳ Загружаю новую обложку…');
           await uploadCover(id,coverInput);
-          await refreshFromSheetsAfterWrite(() => state.books.some(b => normalizeAdminId(b.id) === id && !!b.cover_url));
+          await refreshFromSheetsAfterWrite(() => state.books.some(b => getAdminBookId(b) === id && !!b.cover_url));
         }
         const fileInput=document.getElementById('editEpub');
         if(fileInput?.files?.length){
@@ -3440,7 +3441,7 @@
     // ---- ЦИТАТЫ ----
     function editQuotes(id) {
       id=normalizeAdminId(id);
-      const book = state.books.find(b => normalizeAdminId(b.id) === id);
+      const book = state.books.find(b => getAdminBookId(b) === id);
       if (!book) {
         return;
       }
@@ -3478,7 +3479,7 @@
                   style="width:100%;margin:8px 0;">
             ➕ Добавить цитату
           </button>
-          <button class="btn primary" onclick="saveQuotes(${JSON.stringify(String(id))})"
+          <button class="btn primary" onclick="window.saveQuotes(${JSON.stringify(String(id))})"
                   style="width:100%;">
             💾 Сохранить все цитаты
           </button>
@@ -3532,13 +3533,13 @@
         toast('⏳ Проверяю цитаты в Google Таблице…');
         const saved = await refreshFromSheetsAfterWrite(
           () => {
-            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            const current = state.books.find(b => getAdminBookId(b) === id);
             const currentQuotes = Array.isArray(current?.quotes) ? current.quotes : arr(current?.quotes);
             return JSON.stringify(currentQuotes) === JSON.stringify(quotes);
           }
         );
         if (!saved) throw new Error('Цитаты не появились в Google Таблице');
-        const current = state.books.find(b => normalizeAdminId(b.id) === id);
+        const current = state.books.find(b => getAdminBookId(b) === id);
         if (current) current.quotes = quotes;
         toast(`✅ ${quotes.length} цитат сохранено`); adminTab('books'); render();
       } catch(e){ toast('❌ '+(e.message||'Ошибка сохранения цитат')); }
@@ -3691,6 +3692,15 @@
       });
       container.innerHTML = html;
     }
+    // Явно экспортируем функции админ-панели в window.
+    // Это важно для Telegram WebView и inline onclick.
+    window.editBook = editBook;
+    window.saveEditBook = saveEditBook;
+    window.editQuotes = editQuotes;
+    window.saveQuotes = saveQuotes;
+    window.deleteBook = deleteBook;
+    window.showAddBookForm = showAddBookForm;
+    window.adminTab = adminTab;
   </script>
 </body>
 </html>
