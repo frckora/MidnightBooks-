@@ -1197,10 +1197,17 @@
   <div id="toast" class="toast"></div>
   <script>
     "use strict";
-    const SHEETS = {};
-    const STATS_API =
-      "https://script.google.com/macros/s/AKfycbzm1LbTu3ezEnGVfnxQW7gBPw7UFmqmdYBV9Aw8YfEmFnMu2cZ9RTAq8VwKjqcHZbeqpA/exec";
-    const CACHE_KEY = "midnightbooks_cache_v3";
+    const API_URL =
+      "https://script.google.com/macros/s/AKfycbzQx7rBsgE6bcc6vfl0HsMaJXZ_kUNJnVbgeezyJKhre1B74COrfXAc1PTzyPSTjcLxkA/exec";
+    const SHEETS = {
+      books: API_URL + "?action=books",
+      playlists: API_URL + "?action=playlists",
+      files: API_URL + "?action=files",
+      covers: API_URL + "?action=covers",
+      announcements: API_URL + "?action=announcements"
+    };
+    const STATS_API = API_URL;
+    const CACHE_KEY = "midnightbooks_cache_v4_apps_script";
     const ADMIN_PASSWORD = "midnight2026";
 
     const state = {
@@ -1492,41 +1499,36 @@
       return escUrl(raw);
     }
     function normalizeBook(b, i) {
+      const raw = b && typeof b === "object" ? b : {};
+      const stableId = raw.id ?? raw.book_id ?? raw.bookId;
+      const seriesOrder = raw.series_order ?? raw.series_number ?? raw.seriesOrder ?? "";
+      const coverUrl = raw.cover_url ?? raw.coverUrl ?? raw.cover ?? "";
       return {
-        ...b,
-        id: normalizeId(b.id ?? i + 1),
-        title: String(b.title ?? "Без названия"),
-        author: String(b.author ?? "Неизвестный автор"),
-        series: String(b.series ?? ""),
-        series_order: String(b.series_order ?? ""),
-        trops: typeof b.trops === "string"
-                ? b.trops
-                    .split(",")
-                    .map(t => t.trim())
-                    .filter(Boolean)
-                : (b.trops || []),
-        triggers: typeof b.triggers === "string"
-                  ? b.triggers
-                      .split(",")
-                      .map(t => t.trim())
-                      .filter(Boolean)
-                  : (b.triggers || []),
-        quotes: typeof b.quotes === "string"
-                ? b.quotes
-                    .split("|")
-                    .map(q => q.trim())
-                    .filter(Boolean)
-                : (b.quotes || []),
-        description: String(
-          b.description ?? "Описание пока не добавлено."
-        ),
-        cover_emoji: String(
-          b.cover_emoji ?? ["🌹", "🗡️", "🎭", "🌿"][i % 4]
-        ),
-        cover_url: String(b.cover_url ?? b.cover ?? ""),
-        rating: 0,
-        release_date: String(b.release_date ?? ""),
-        status: String(b.status ?? "published")
+        ...raw,
+        // ID из таблицы всегда имеет приоритет. Номер позиции используется
+        // только как крайний fallback для очень старых строк без ID.
+        id: normalizeId(stableId || (i + 1)),
+        title: String(raw.title ?? raw.name ?? "Без названия"),
+        author: String(raw.author ?? "Неизвестный автор"),
+        series: String(raw.series ?? ""),
+        series_order: String(seriesOrder),
+        series_number: String(raw.series_number ?? seriesOrder),
+        trops: typeof raw.trops === "string"
+                ? raw.trops.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
+                : (Array.isArray(raw.trops) ? raw.trops : []),
+        triggers: typeof raw.triggers === "string"
+                  ? raw.triggers.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
+                  : (Array.isArray(raw.triggers) ? raw.triggers : []),
+        quotes: typeof raw.quotes === "string"
+                ? raw.quotes.split(/\r?\n|\|/).map(q => q.trim()).filter(Boolean)
+                : (Array.isArray(raw.quotes) ? raw.quotes : []),
+        description: String(raw.description ?? "Описание пока не добавлено."),
+        cover_emoji: String(raw.cover_emoji ?? ["🌹", "🗡️", "🎭", "🌿"][i % 4]),
+        cover_url: String(coverUrl),
+        epub_url: String(raw.epub_url ?? raw.epubUrl ?? ""),
+        rating: num(raw.rating, 0),
+        release_date: String(raw.release_date ?? ""),
+        status: String(raw.status ?? "published")
       };
     }
     // =========================
@@ -1605,23 +1607,16 @@
     function mergeCoversIntoBooks() {
       const coverMap = new Map();
       state.covers.forEach(c => {
-        const id = normalizeId(
-          c.book_id ??
-          c.bookId ??
-          c.book ??
-          c.id
-        );
-        if (!id) {
-          return;
-        }
+        const id = normalizeId(c.book_id ?? c.bookId ?? c.book ?? c.id);
+        if (!id) return;
         const url = getCoverLink(c);
-        if (url) {
-          coverMap.set(id, url);
-        }
+        if (url) coverMap.set(id, url);
       });
       state.books = state.books.map(book => ({
         ...book,
-        cover_url: coverMap.get(normalizeId(book.id)) || ""
+        // Никогда не стираем cover_url из самой книги, если отдельная
+        // запись covers отсутствует.
+        cover_url: coverMap.get(normalizeId(book.id)) || String(book.cover_url || "")
       }));
     }
     function applyData(data) {
@@ -1710,54 +1705,43 @@
              String(bookId)
       );
     }
+    function jsonpRequest(url, timeoutMs = 15000) {
+      return new Promise((resolve, reject) => {
+        const cb = "mbDataCb_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        const script = document.createElement("script");
+        const timer = setTimeout(() => { cleanup(); reject(new Error("API timeout")); }, timeoutMs);
+        function cleanup(){ clearTimeout(timer); try{delete window[cb];}catch{} try{script.remove();}catch{} }
+        window[cb] = data => { cleanup(); if(data?.ok===false) reject(new Error(data.error||"API error")); else resolve(data); };
+        script.onerror = () => { cleanup(); reject(new Error("API network error")); };
+        script.src = String(url) + (String(url).includes("?") ? "&" : "?") + "callback=" + encodeURIComponent(cb) + "&t=" + Date.now();
+        document.head.appendChild(script);
+      });
+    }
     async function fetchRemote(silent = false) {
       if (!silent) showLoading();
-      const url = STATS_API + (STATS_API.includes('?') ? '&' : '?') + 'action=data&t=' + Date.now();
-      const data = await fetchJSON(url);
-      if (!data || data.ok === false) throw new Error(data?.error || 'Apps Script не вернул данные');
-      if (!Array.isArray(data.books)) throw new Error('Apps Script не вернул лист КНИГИ');
-      applyData({
-        books: data.books,
-        playlists: data.playlists || [],
-        files: data.files || [],
-        covers: data.covers || [],
-        announcements: data.announcements || []
-      });
-      storageSet(CACHE_KEY, {
-        books: state.books, playlists: state.playlists, files: state.files,
-        covers: state.covers, announcements: state.announcements, updatedAt: Date.now()
-      });
+      const data = await jsonpRequest(API_URL + "?action=bootstrap");
+      if (!data || !Array.isArray(data.books)) throw new Error("Google Apps Script не вернул список книг");
+      applyData(data);
+      if (data.stats) applyStatsPayload(data);
+      persistLocal();
       render();
-      if (!silent) toast('Библиотека обновлена');
+      if (!silent) toast("Библиотека обновлена из Google Таблицы");
       return data;
     }
     function showLoading() {
-      document.getElementById("main").innerHTML =
-        '<div class="loading">Загружаем библиотеку…</div>';
+      document.getElementById("main").innerHTML = '<div class="loading">Загружаем библиотеку из Google Таблицы…</div>';
     }
     async function loadData(force = false) {
       const cached = storageGet(CACHE_KEY, null);
-      if (force) {
-        await fetchRemote(false);
-        await loadStats();
-        return;
-      }
       try {
-        await fetchRemote(true);
+        await fetchRemote(!force);
         await loadStats();
-      } catch {
+      } catch (e) {
         if (cached && cached.books?.length) {
-          applyData(cached);
-          render();
-          toast("Показан сохранённый кэш");
+          applyData(cached); render(); toast("Не удалось обновить таблицу. Показан сохранённый кэш.");
         } else {
-          state.books = [];
-          state.playlists = [];
-          state.files = [];
-          state.covers = [];
-          state.announcements = [];
-          render();
-          toast("В таблице КНИГИ пока нет данных");
+          state.books=[]; state.playlists=[]; state.files=[]; state.covers=[]; state.announcements=[]; render();
+          toast("Ошибка загрузки из Google Таблицы: " + (e.message || "неизвестная ошибка"));
         }
       }
     }
@@ -2074,9 +2058,10 @@
         ? new Date(a.release_date)
         : null;
       return `<div class="announcement">
-        ${a.cover_url
-          ? `<div class="cover"><img src="${h(normalizeCoverUrl(a.cover_url))}" alt="${h(a.title || "Скоро")}" loading="lazy"></div>`
-          : coverHTML({cover_emoji: a.cover_emoji || "🌙", title: a.title || "Скоро"})}
+        ${coverHTML({
+          cover_emoji: a.cover_emoji || "🌙",
+          title: a.title || "Скоро"
+        })}
         <div>
           <div class="book-title">
             ${h(a.title || "Скоро")}
@@ -2984,388 +2969,727 @@
     loadData(false)
       .then(() => loadStats());
     // =========================
-    // АДМИН-ПАНЕЛЬ — ЕДИНАЯ СИСТЕМА SHEETS + DRIVE
+    // АДМИН-ПАНЕЛЬ
     // =========================
     let adminClickCount = 0;
     let adminClickTimer = null;
-
-    document.getElementById("brandLogo").addEventListener("click", function() {
-      adminClickCount++;
-      if (adminClickCount === 5) {
-        showAdminLogin();
-        adminClickCount = 0;
-      }
-      clearTimeout(adminClickTimer);
-      adminClickTimer = setTimeout(() => adminClickCount = 0, 2000);
-    });
-
+    document.getElementById("brandLogo")
+      .addEventListener("click", function() {
+        adminClickCount++;
+        if (adminClickCount === 5) {
+          showAdminLogin();
+          adminClickCount = 0;
+        }
+        clearTimeout(adminClickTimer);
+        adminClickTimer = setTimeout(() => {
+          adminClickCount = 0;
+        }, 2000);
+      });
     function showAdminLogin() {
       const modal = document.getElementById("modal");
       modal.classList.remove("hidden");
       document.getElementById("modalBox").innerHTML = `
         <button class="close" id="closeAdminModal">×</button>
-        <div class="section-title" style="margin-top:3px">🔐 Админ-панель</div>
-        <input type="password" id="adminPasswordInput" class="admin-input" placeholder="Пароль">
-        <button class="btn primary" id="adminLoginBtn" style="width:100%;margin-top:8px">Войти</button>
-        <button class="btn" id="closeAdminBtn" style="width:100%;margin-top:6px">Закрыть</button>
-        <div style="margin-top:12px;color:var(--muted);font:11px Arial;line-height:1.5">
-          Все изменения записываются в Google Таблицу. Файлы автоматически загружаются в Google Drive.
-        </div>`;
-      document.getElementById("closeAdminModal").onclick = closeAdminPanel;
-      document.getElementById("closeAdminBtn").onclick = closeAdminPanel;
-      document.getElementById("adminLoginBtn").onclick = () => {
-        if (document.getElementById("adminPasswordInput").value === ADMIN_PASSWORD) {
-          renderAdminPanel();
-        } else toast("❌ Неверный пароль");
-      };
-    }
-
-    function closeAdminPanel() {
-      document.getElementById("modal").classList.add("hidden");
-    }
-
-    function renderAdminPanel() {
-      const box = document.getElementById("modalBox");
-      box.innerHTML = `
-        <button class="close" id="adminClose">×</button>
-        <div class="section-title" style="margin-top:3px">⚙️ Управление библиотекой</div>
-        <div class="admin-grid">
-          <button class="btn admin-tab-btn" data-admin-tab="books">📚 Книги</button>
-          <button class="btn admin-tab-btn" data-admin-tab="playlist">🎵 Музыка</button>
-          <button class="btn admin-tab-btn" data-admin-tab="announce">📢 Анонсы</button>
-          <button class="btn admin-tab-btn" data-admin-tab="stats">📊 Статистика</button>
+        <div class="section-title" style="margin-top:3px">
+          🔐 Вход в админ-панель
         </div>
-        <div id="adminTabContent"></div>`;
-      document.getElementById("adminClose").onclick = closeAdminPanel;
-      document.querySelectorAll('.admin-tab-btn').forEach(btn => btn.onclick = () => adminTab(btn.dataset.adminTab));
+        <div id="adminLoginForm">
+          <input type="password" id="adminPasswordInput"
+                 class="admin-input" placeholder="Введите пароль">
+          <button class="btn primary" id="adminLoginBtn"
+                  style="width:100%;margin-top:8px;">
+            Войти
+          </button>
+          <button class="btn" id="closeAdminBtn"
+                  style="width:100%;margin-top:6px;">
+            Закрыть
+          </button>
+        </div>
+        <div id="adminContent" style="display:none;margin-top:12px;"></div>
+      `;
+      document.getElementById("closeAdminModal").onclick =
+        () => modal.classList.add("hidden");
+      document.getElementById("closeAdminBtn").onclick =
+        () => modal.classList.add("hidden");
+      document.getElementById("adminLoginBtn").onclick =
+        function() {
+          const pass = document.getElementById(
+            "adminPasswordInput"
+          ).value;
+          if (pass === ADMIN_PASSWORD) {
+            document.getElementById("adminLoginForm")
+              .style.display = "none";
+            document.getElementById("adminContent")
+              .style.display = "block";
+            renderAdminPanel();
+          } else {
+            toast("❌ Неверный пароль!");
+          }
+        };
+    }
+    function closeAdminPanel() {
+      document.getElementById("modal")
+        .classList.add("hidden");
+    }
+    function renderAdminPanel() {
+      const container = document.getElementById("adminContent");
+      container.innerHTML = `
+        <div class="admin-grid">
+          <button class="btn admin-tab-btn" data-admin-tab="books" onclick="adminTab('books')">📚 Книги</button>
+          <button class="btn admin-tab-btn" data-admin-tab="playlist" onclick="adminTab('playlist')">🎵 Плейлисты</button>
+          <button class="btn admin-tab-btn" data-admin-tab="announce" onclick="adminTab('announce')">📢 Анонсы</button>
+          <button class="btn admin-tab-btn" data-admin-tab="stats" onclick="adminTab('stats')">📊 Статистика</button>
+        </div>
+        <div id="adminTabContent"></div>
+        <button class="btn" onclick="closeAdminPanel()" style="width:100%;margin-top:12px;">🚪 Выйти</button>
+      `;
       adminTab("books");
     }
-
     function adminTab(tab) {
-      document.querySelectorAll('.admin-tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.adminTab === tab));
-      const c = document.getElementById("adminTabContent");
-      if (!c) return;
-      if (tab === "books") renderAdminBooks(c);
-      if (tab === "playlist") renderAdminPlaylists(c);
-      if (tab === "announce") renderAdminAnnounce(c);
-      if (tab === "stats") renderAdminStats(c);
+      document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.adminTab === tab);
+      });
+      const container = document.getElementById("adminTabContent");
+      if (!container) return;
+      if (tab === "books") renderAdminBooks(container);
+      if (tab === "playlist") renderAdminPlaylists(container);
+      if (tab === "announce") renderAdminAnnounce(container);
+      if (tab === "stats") renderAdminStats(container);
     }
 
     function apiReady() {
       return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(String(STATS_API || '').trim());
     }
+    async function apiPost(payload) {
+      if (!apiReady()) {
+        throw new Error("Не настроен URL Apps Script");
+      }
 
-    function apiPost(payload, timeoutMs = 60000) {
-      return new Promise((resolve, reject) => {
-        if (!apiReady()) return reject(new Error('Не настроен URL Apps Script'));
-        const iframeName = 'mbApiFrame_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-        const iframe = document.createElement('iframe');
-        iframe.name = iframeName;
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = STATS_API;
-        form.target = iframeName;
-        form.enctype = 'application/x-www-form-urlencoded';
-        form.style.display = 'none';
-        const input = document.createElement('input');
-        input.type = 'hidden'; input.name = 'data'; input.value = JSON.stringify(payload);
-        form.appendChild(input); document.body.appendChild(form);
-        let finished = false;
-        const finish = (ok, error) => {
-          if (finished) return;
-          finished = true; clearTimeout(timer);
-          try { form.remove(); } catch {}
-          try { iframe.remove(); } catch {}
-          ok ? resolve({ok:true}) : reject(new Error(error || 'Apps Script не подтвердил сохранение'));
-        };
-        const timer = setTimeout(() => finish(true), timeoutMs);
-        try { form.submit(); } catch (e) { finish(false, e.message || 'Не удалось отправить данные'); }
-      });
+      const body = "data=" + encodeURIComponent(JSON.stringify(payload));
+
+      // Apps Script Web App не даёт браузеру прочитать обычный POST-ответ
+      // из-за CORS. Поэтому запись отправляется no-cors, а результат
+      // подтверждается отдельным JSONP GET через refreshFromSheetsAfterWrite().
+      try {
+        await fetch(STATS_API, {
+          method: "POST",
+          mode: "no-cors",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+          },
+          body
+        });
+        return { ok: true, submitted: true };
+      } catch (fetchError) {
+        // Надёжный запасной способ для Telegram WebView.
+        return await new Promise((resolve, reject) => {
+          const iframeName =
+            "mbApiFrame_" + Date.now() + "_" +
+            Math.random().toString(36).slice(2);
+
+          const iframe = document.createElement("iframe");
+          iframe.name = iframeName;
+          iframe.style.display = "none";
+          document.body.appendChild(iframe);
+
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = STATS_API;
+          form.target = iframeName;
+          form.enctype = "application/x-www-form-urlencoded";
+          form.style.display = "none";
+
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "data";
+          input.value = JSON.stringify(payload);
+          form.appendChild(input);
+          document.body.appendChild(form);
+
+          let done = false;
+          const cleanup = () => {
+            try { form.remove(); } catch {}
+            try { iframe.remove(); } catch {}
+          };
+
+          const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            cleanup();
+            resolve({ ok: true, submitted: true });
+          }, 5000);
+
+          try {
+            form.submit();
+          } catch (e) {
+            clearTimeout(timer);
+            if (!done) {
+              done = true;
+              cleanup();
+              reject(e);
+            }
+          }
+        });
+      }
     }
 
-    async function refreshFromSheetsAfterWrite(checkFn, attempts = 8) {
+    async function refreshFromSheetsAfterWrite(checkFn, attempts = 5) {
       let lastError = null;
       for (let i = 0; i < attempts; i++) {
         try {
-          await new Promise(r => setTimeout(r, i === 0 ? 1500 : 1800));
+          await new Promise(r => setTimeout(r, i === 0 ? 1200 : 1400));
           await fetchRemote(true);
-          if (!checkFn || checkFn()) return true;
-        } catch (e) { lastError = e; }
+          if (!checkFn || checkFn()) {
+            return true;
+          }
+        } catch (e) {
+          lastError = e;
+        }
       }
       if (lastError) throw lastError;
       return false;
     }
-
     function normalizeAdminId(id) { return String(id ?? '').trim(); }
     function persistLocal() {
-      storageSet(CACHE_KEY, {books:state.books, playlists:state.playlists, files:state.files, covers:state.covers, announcements:state.announcements, updatedAt:Date.now()});
+      storageSet(CACHE_KEY, { books:state.books, playlists:state.playlists, files:state.files, covers:state.covers, announcements:state.announcements, updatedAt:Date.now() });
+    }
+    async function uploadCover(bookId, input) {
+      const file=input?.files?.[0]; if(!file)return null;
+      if(!file.type.startsWith('image/'))throw new Error('Файл обложки должен быть изображением.');
+      if(file.size>10*1024*1024)throw new Error('Обложка слишком большая. Максимум 10 МБ.');
+      const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(file);});
+      return apiPost({action:'upload_cover',book_id:normalizeAdminId(bookId),file_name:file.name,mime_type:file.type,file_base64:base64});
     }
 
-    function fileToBase64(input, maxMB = 20) {
+    async function uploadEpub(bookId, input) {
       const file = input?.files?.[0];
-      if (!file) return Promise.resolve(null);
-      if (file.size > maxMB * 1024 * 1024) throw new Error(`Файл слишком большой. Максимум ${maxMB} МБ.`);
-      return new Promise((resolve, reject) => {
+      if (!file) return null;
+      if (!file.name.toLowerCase().endsWith('.epub')) throw new Error('Можно загружать только EPUB.');
+      if (file.size > 20 * 1024 * 1024) throw new Error('EPUB слишком большой. Максимум 20 МБ.');
+      const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve({file, base64:String(reader.result).split(',')[1] || ''});
-        reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
-        reader.readAsDataURL(file);
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = reject; reader.readAsDataURL(file);
       });
+      const result = await apiPost({ action:'upload_epub', book_id:normalizeAdminId(bookId), file_name:file.name, mime_type:file.type || 'application/epub+zip', file_base64:base64 });
+      return result;
     }
 
-    async function uploadBookAsset(bookId, inputId, type) {
-      const x = await fileToBase64(document.getElementById(inputId));
-      if (!x) return null;
-      if (type === 'epub' && !x.file.name.toLowerCase().endsWith('.epub')) throw new Error('Можно загружать только EPUB.');
-      return apiPost({
-        action: type === 'cover' ? 'upload_cover' : 'upload_epub',
-        book_id: normalizeAdminId(bookId),
-        file_name: x.file.name,
-        mime_type: x.file.type || (type === 'epub' ? 'application/epub+zip' : 'image/jpeg'),
-        file_base64: x.base64,
-        asset_type: type
-      }, 90000);
-    }
-
-    async function uploadAudio(bookId, inputId) {
-      const x = await fileToBase64(document.getElementById(inputId));
-      if (!x) return null;
-      if (!/^audio\//.test(x.file.type) && !/\.(mp3|m4a|ogg|wav)$/i.test(x.file.name)) throw new Error('Выберите аудиофайл MP3, M4A, OGG или WAV.');
-      return apiPost({action:'upload_audio', book_id:normalizeAdminId(bookId), file_name:x.file.name, mime_type:x.file.type || 'audio/mpeg', file_base64:x.base64}, 90000);
-    }
-
-    // ---------- КНИГИ ----------
+    // ---- КНИГИ ----
     function renderAdminBooks(container) {
-      container.innerHTML = `
-        <div class="admin-box">
-          <h3 style="color:var(--silver2);margin-top:0">📚 Книги (${state.books.length})</h3>
-          <button class="btn primary" onclick="showAddBookForm()" style="width:100%">➕ Добавить книгу</button>
+      let html = `
+        <div style="margin-bottom:12px;">
+          <h3 style="color:var(--silver2);">
+            📚 Книги (${state.books.length})
+          </h3>
+          <button class="btn primary" onclick="showAddBookForm()"
+                  style="width:100%;">
+            ➕ Добавить книгу
+          </button>
         </div>
-        ${state.books.map(book => `
+        <div id="adminBookList">
+      `;
+      state.books.forEach(book => {
+        const qCount = Array.isArray(book.quotes)
+          ? book.quotes.length
+          : 0;
+        const tCount = Array.isArray(book.triggers)
+          ? book.triggers.length
+          : 0;
+        html += `
           <div class="admin-item">
-            <div style="min-width:0;flex:1">
-              <div class="admin-item-title">${h(book.cover_emoji || '📖')} ${h(book.title)}</div>
-              <div class="admin-item-sub">${h(book.author)} · ${h(book.series || 'без серии')}</div>
+            <div>
+              <div class="admin-item-title">
+                ${book.cover_emoji || "📖"} ${h(book.title)}
+              </div>
+              <div class="admin-item-sub">
+                ${h(book.author)} · 💬 ${qCount} · 🩸 ${tCount}
+              </div>
             </div>
             <div class="admin-btn-group">
-              <button class="admin-btn wine" onclick="editBook(${JSON.stringify(String(book.id))})">✏️</button>
-              <button class="admin-btn" onclick="editQuotes(${JSON.stringify(String(book.id))})">💬</button>
-              <button class="admin-btn danger" onclick="deleteBookAdmin(${JSON.stringify(String(book.id))})">🗑️</button>
+              <button class="admin-btn wine"
+                      onclick="editBook(${JSON.stringify(String(book.id))})">
+                ✏️
+              </button>
+              <button class="admin-btn"
+                      onclick="editQuotes(${JSON.stringify(String(book.id))})">
+                💬
+              </button>
+              <button class="admin-btn danger"
+                      onclick="deleteBook(${JSON.stringify(String(book.id))})">
+                🗑️
+              </button>
             </div>
-          </div>`).join('') || '<div class="empty">Книг пока нет.</div>'}`;
+          </div>
+        `;
+      });
+      html += `</div>`;
+      container.innerHTML = html;
     }
-
-    function bookForm(book = null) {
-      const e = book ? 'edit' : 'new';
-      const val = k => h(book?.[k] ?? '');
-      const list = k => h((Array.isArray(book?.[k]) ? book[k] : arr(book?.[k])).join(', '));
-      return `
+    function showAddBookForm() {
+      const container = document.getElementById(
+        "adminTabContent"
+      );
+      container.innerHTML = `
         <div class="admin-box">
-          <h3 style="color:var(--silver2);margin-top:0">${book ? '✏️ Редактирование книги' : '➕ Новая книга'}</h3>
-          <input type="text" id="${e}Title" class="admin-input" value="${val('title')}" placeholder="Название *">
-          <input type="text" id="${e}Author" class="admin-input" value="${val('author')}" placeholder="Автор *">
-          <input type="text" id="${e}Trops" class="admin-input" value="${list('trops')}" placeholder="Тропы через запятую">
-          <input type="text" id="${e}Triggers" class="admin-input" value="${list('triggers')}" placeholder="Триггеры через запятую">
-          <textarea id="${e}Description" class="admin-input" rows="5" placeholder="Аннотация">${val('description')}</textarea>
-          <input type="text" id="${e}Series" class="admin-input" value="${val('series')}" placeholder="Серия">
-          <input type="text" id="${e}SeriesOrder" class="admin-input" value="${val('series_order')}" placeholder="Номер в серии">
-          <input type="date" id="${e}ReleaseDate" class="admin-input" value="${val('release_date')}" placeholder="Дата">
-          <select id="${e}Status" class="admin-input">
-            <option value="published" ${val('status') === 'published' ? 'selected' : ''}>Опубликована</option>
-            <option value="active" ${val('status') === 'active' ? 'selected' : ''}>Активна</option>
-            <option value="draft" ${val('status') === 'draft' ? 'selected' : ''}>Черновик</option>
+          <h3 style="color:var(--silver2);">➕ Новая книга</h3>
+          <input type="text" id="newTitle" class="admin-input"
+                 placeholder="Название">
+          <input type="text" id="newAuthor" class="admin-input"
+                 placeholder="Автор">
+          <input type="text" id="newTrops" class="admin-input"
+                 placeholder="Тропы (через запятую)">
+          <input type="text" id="newTriggers" class="admin-input"
+                 placeholder="Триггеры (через запятую)">
+          <textarea id="newDescription" class="admin-input" rows="3"
+                    placeholder="Аннотация"></textarea>
+          <input type="text" id="newCover" class="admin-input"
+                 placeholder="Обложка (эмодзи)">
+          <input type="text" id="newCoverUrl" class="admin-input"
+                 placeholder="Прямая ссылка на обложку (необязательно)">
+          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Файл обложки</label>
+          <input type="file" id="newCoverFile" class="admin-input" accept="image/*">
+          <input type="text" id="newSeries" class="admin-input"
+                 placeholder="Серия (если есть)">
+          <input type="text" id="newSeriesOrder" class="admin-input" placeholder="Номер в серии">
+          <input type="date" id="newReleaseDate" class="admin-input" placeholder="Дата выхода">
+          <select id="newStatus" class="admin-input">
+            <option value="published">Опубликована</option>
+            <option value="active">Активна</option>
+            <option value="draft">Черновик</option>
           </select>
-          <input type="text" id="${e}CoverEmoji" class="admin-input" value="${val('cover_emoji')}" placeholder="Эмодзи обложки">
-          <input type="text" id="${e}CoverUrl" class="admin-input" value="${val('cover_url') || val('cover')}" placeholder="Или ссылка на обложку">
-          <label style="color:var(--muted);font:11px Arial;display:block;margin-top:8px">🖼 Файл обложки — автоматически в Google Drive</label>
-          <input type="file" id="${e}CoverFile" class="admin-input" accept="image/*">
-          <label style="color:var(--muted);font:11px Arial;display:block;margin-top:8px">📖 EPUB — автоматически в Google Drive</label>
-          <input type="file" id="${e}Epub" class="admin-input" accept=".epub,application/epub+zip">
-          <label style="color:var(--muted);font:11px Arial;display:block;margin-top:8px">💬 Цитаты — каждая с новой строки</label>
-          <textarea id="${e}Quotes" class="admin-input" rows="5" placeholder="Цитата 1\nЦитата 2">${h((Array.isArray(book?.quotes) ? book.quotes : arr(book?.quotes)).join('\n'))}</textarea>
-          <button class="btn primary" onclick="${book ? `saveEditBookFull(${JSON.stringify(String(book.id))})` : 'saveNewBookFull()'}" style="width:100%;margin-top:8px">💾 Сохранить всё</button>
-          <button class="btn" onclick="adminTab('books')" style="width:100%;margin-top:5px">↩️ Назад</button>
-        </div>`;
-    }
-
-    function showAddBookForm() { document.getElementById('adminTabContent').innerHTML = bookForm(); }
-    function collectBookForm(prefix, id) {
-      const g = x => document.getElementById(prefix + x);
-      return {
-        ...(id ? {id} : {}),
-        title:g('Title').value.trim() || 'Без названия',
-        author:g('Author').value.trim() || 'Неизвестный автор',
-        trops:g('Trops').value.split(',').map(x=>x.trim()).filter(Boolean),
-        triggers:g('Triggers').value.split(',').map(x=>x.trim()).filter(Boolean),
-        description:g('Description').value.trim() || 'Описание пока не добавлено.',
-        series:g('Series').value.trim(),
-        series_order:g('SeriesOrder').value.trim(),
-        release_date:g('ReleaseDate').value,
-        status:g('Status').value,
-        cover_emoji:g('CoverEmoji').value.trim() || '📖',
-        cover:g('CoverUrl').value.trim(),
-        quotes:g('Quotes').value.split(/\n+/).map(x=>x.trim()).filter(Boolean)
-      };
-    }
-
-    async function saveNewBookFull() {
-      try {
-        const data = collectBookForm('new');
-        // ID создаём ДО отправки. POST в Apps Script идёт через скрытый iframe,
-        // поэтому браузер не может прочитать его cross-origin JSON-ответ.
-        // После записи мы проверяем эту же книгу через GET /action=data.
-        data.id = 'book_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
-        const id = normalizeAdminId(data.id);
-        await apiPost({action:'add_book',book:data});
-        toast('⏳ Проверяю книгу в Google Таблице…');
-        if (!await refreshFromSheetsAfterWrite(() => state.books.some(b=>normalizeAdminId(b.id)===id))) throw new Error('Google Таблица не подтвердила книгу');
-        if (document.getElementById('newCoverFile')?.files?.length) {
-          toast('⏳ Загружаю обложку в Google Drive…');
-          await uploadBookAsset(id,'newCoverFile','cover');
-        }
-        if (document.getElementById('newEpub')?.files?.length) {
-          toast('⏳ Загружаю EPUB в Google Drive…');
-          await uploadBookAsset(id,'newEpub','epub');
-        }
-        await refreshFromSheetsAfterWrite(() => state.books.some(b=>normalizeAdminId(b.id)===id), 6);
-        toast('✅ Книга, данные и файлы сохранены');
-        adminTab('books'); render();
-      } catch(e) { toast('❌ ' + (e.message || 'Ошибка сохранения')); }
-    }
-
-    function editBook(id) {
-      const book = state.books.find(b=>normalizeAdminId(b.id)===normalizeAdminId(id));
-      if (!book) return;
-      document.getElementById('adminTabContent').innerHTML = bookForm(book);
-    }
-
-    async function saveEditBookFull(id) {
-      try {
-        id = normalizeAdminId(id);
-        const data = collectBookForm('edit', id);
-        await apiPost({action:'update_book',book:data});
-        toast('⏳ Проверяю изменения в Google Таблице…');
-        if (!await refreshFromSheetsAfterWrite(() => {
-          const b=state.books.find(x=>normalizeAdminId(x.id)===id);
-          return !!b && b.title===data.title && b.author===data.author && b.description===data.description;
-        })) throw new Error('Google Таблица не подтвердила изменения');
-        if (document.getElementById('editCoverFile')?.files?.length) {
-          toast('⏳ Загружаю новую обложку…');
-          await uploadBookAsset(id,'editCoverFile','cover');
-        }
-        if (document.getElementById('editEpub')?.files?.length) {
-          toast('⏳ Загружаю новый EPUB…');
-          await uploadBookAsset(id,'editEpub','epub');
-        }
-        await refreshFromSheetsAfterWrite(() => state.books.some(b=>normalizeAdminId(b.id)===id), 6);
-        toast('✅ Всё сохранено'); adminTab('books'); render();
-      } catch(e) { toast('❌ ' + (e.message || 'Ошибка сохранения')); }
-    }
-
-    async function deleteBookAdmin(id) {
-      id=normalizeAdminId(id);
-      if (!id || !confirm('Удалить книгу из Google Таблицы? Файлы Drive не удаляются автоматически.')) return;
-      try {
-        await apiPost({action:'delete_book',book_id:id});
-        if (!await refreshFromSheetsAfterWrite(() => !state.books.some(b=>normalizeAdminId(b.id)===id), 6)) throw new Error('Удаление не подтверждено таблицей');
-        toast('🗑️ Книга удалена'); adminTab('books'); render();
-      } catch(e){ toast('❌ '+(e.message||'Ошибка удаления')); }
-    }
-
-    function editQuotes(id) {
-      const book=state.books.find(b=>normalizeAdminId(b.id)===normalizeAdminId(id)); if(!book)return;
-      const q=Array.isArray(book.quotes)?book.quotes:arr(book.quotes);
-      document.getElementById('adminTabContent').innerHTML=`
-        <div class="admin-box">
-          <h3 style="color:var(--silver2);margin-top:0">💬 Цитаты: ${h(book.title)}</h3>
-          <textarea id="quotesAll" class="admin-input" rows="12" placeholder="Каждая цитата с новой строки">${h(q.join('\n'))}</textarea>
-          <button class="btn primary" onclick="saveQuotesFull(${JSON.stringify(String(id))})" style="width:100%">💾 Сохранить цитаты</button>
-          <button class="btn" onclick="adminTab('books')" style="width:100%;margin-top:5px">↩️ Назад</button>
-        </div>`;
-    }
-    async function saveQuotesFull(id){
-      const quotes=document.getElementById('quotesAll').value.split(/\n+/).map(x=>x.trim()).filter(Boolean);
-      try{
-        await apiPost({action:'update_book',book:{id:normalizeAdminId(id),quotes}});
-        if(!await refreshFromSheetsAfterWrite(()=>{const b=state.books.find(x=>normalizeAdminId(x.id)===normalizeAdminId(id));return JSON.stringify(Array.isArray(b?.quotes)?b.quotes:arr(b?.quotes))===JSON.stringify(quotes)})) throw new Error('Цитаты не подтверждены таблицей');
-        toast(`✅ ${quotes.length} цитат сохранено`);adminTab('books');render();
-      }catch(e){toast('❌ '+(e.message||'Ошибка'));}
-    }
-
-    // ---------- МУЗЫКА ----------
-    function renderAdminPlaylists(container) {
-      container.innerHTML=`
-        <div class="admin-box">
-          <h3 style="color:var(--silver2);margin-top:0">🎵 Музыка</h3>
-          <select id="playlistBookSelect" class="admin-input"><option value="">Выберите книгу</option>${state.books.map(b=>`<option value="${h(b.id)}">${h(b.title)}</option>`).join('')}</select>
-          <input type="text" id="trackName" class="admin-input" placeholder="Название трека">
-          <input type="text" id="trackArtist" class="admin-input" placeholder="Исполнитель">
-          <input type="text" id="trackMood" class="admin-input" placeholder="Настроение (необязательно)">
-          <input type="text" id="trackUrl" class="admin-input" placeholder="Или ссылка на MP3">
-          <label style="color:var(--muted);font:11px Arial">🎧 Или загрузить аудиофайл в Google Drive</label>
-          <input type="file" id="trackFile" class="admin-input" accept="audio/*,.mp3,.m4a,.ogg,.wav">
-          <button class="btn primary" onclick="saveTrackFull()" style="width:100%">💾 Сохранить трек</button>
+          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 EPUB-файл</label>
+          <input type="file" id="newEpub" class="admin-input" accept=".epub,application/epub+zip">
+          <h4 style="color:var(--muted);margin:12px 0 6px;">
+            💬 Цитаты (каждая с новой строки)
+          </h4>
+          <textarea id="newQuotes" class="admin-input" rows="3"
+                    placeholder="Цитата 1&#10;Цитата 2&#10;Цитата 3"></textarea>
+          <button class="btn primary" onclick="saveNewBook()"
+                  style="width:100%;margin-top:8px;">
+            💾 Сохранить книгу
+          </button>
+          <button class="btn" onclick="adminTab('books')"
+                  style="width:100%;margin-top:4px;">
+            ↩️ Назад
+          </button>
         </div>
-        <div id="playlistTracks"></div>`;
-      document.getElementById('playlistBookSelect').onchange=e=>renderPlaylistTracks(e.target.value);
+      `;
     }
-    function renderPlaylistTracks(bookId){
-      const c=document.getElementById('playlistTracks'); if(!c)return;
-      const tracks=state.playlists.filter(p=>String(p.book_id??p.bookId)===String(bookId));
-      c.innerHTML=tracks.length?tracks.map(t=>`<div class="admin-item"><div><div class="admin-item-title">${h(t.track_name||'Без названия')}</div><div class="admin-item-sub">${h(t.artist||'—')}</div></div><button class="admin-btn danger" onclick="removeTrackFromPlaylist(${JSON.stringify(String(t.id))})">🗑️</button></div>`).join(''):'<div class="empty">Треков пока нет.</div>';
+    async function saveNewBook() {
+      try {
+        const triggersArray = document.getElementById("newTriggers").value.split(',').map(t=>t.trim()).filter(Boolean);
+        const quotes = document.getElementById('newQuotes').value
+          .split(/\n+/)
+          .map(q => q.trim())
+          .filter(Boolean);
+        const newBook = {
+          id: "book_" + Date.now() + "_" + Math.random().toString(36).slice(2,8),
+          title: document.getElementById("newTitle").value || "Без названия",
+          author: document.getElementById("newAuthor").value || "Неизвестный автор",
+          trops: document.getElementById("newTrops").value.split(",").map(t=>t.trim()).filter(Boolean),
+          triggers: triggersArray,
+          description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
+          cover_emoji: document.getElementById("newCover").value || "📖",
+          cover_url: document.getElementById("newCoverUrl")?.value || "",
+          series: document.getElementById("newSeries").value || null,
+          series_order: document.getElementById("newSeriesOrder")?.value || "",
+          release_date: document.getElementById("newReleaseDate")?.value || "",
+          status: document.getElementById("newStatus")?.value || "published",
+          quotes: quotes,
+          rating:0
+        };
+        await apiPost({action:'add_book', book:newBook});
+        const id = normalizeAdminId(newBook.id);
+        toast('⏳ Проверяю сохранение в Google Таблице…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => state.books.some(b => normalizeAdminId(b.id) === id)
+        );
+        if (!saved) throw new Error('Google Таблица не подтвердила сохранение книги');
+        const coverInput = document.getElementById('newCoverFile');
+        if (coverInput?.files?.length) {
+          toast('⏳ Загружаю обложку в Google Drive…');
+          await uploadCover(id, coverInput);
+          await refreshFromSheetsAfterWrite(() => state.books.some(b => normalizeAdminId(b.id) === id && !!b.cover_url));
+        }
+        const fileInput = document.getElementById('newEpub');
+        if (fileInput?.files?.length) {
+          toast('⏳ Загружаю EPUB…');
+          await uploadEpub(id, fileInput);
+          await refreshFromSheetsAfterWrite(
+            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
+          );
+          toast('✅ Книга и EPUB сохранены');
+        } else {
+          toast('✅ Книга сохранена в Google Таблицу');
+        }
+        adminTab('books'); render();
+      } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
-    async function saveTrackFull(){
-      const bookId=document.getElementById('playlistBookSelect').value;if(!bookId){toast('Выберите книгу');return;}
-      const trackName=document.getElementById('trackName').value.trim();if(!trackName){toast('Введите название трека');return;}
-      try{
-        let url=document.getElementById('trackUrl').value.trim();
-        const file=document.getElementById('trackFile');
-        if(file?.files?.length){toast('⏳ Загружаю музыку в Google Drive…');const r=await uploadAudio(bookId,'trackFile');url=r.file_url;}
-        if(!url)throw new Error('Укажите ссылку или выберите аудиофайл');
-        const track={id:'track_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),book_id:bookId,track_name:trackName,artist:document.getElementById('trackArtist').value.trim()||'—',file_url:url,mood:document.getElementById('trackMood').value.trim()};
-        await apiPost({action:'add_playlist',playlist:track});
-        if(!await refreshFromSheetsAfterWrite(()=>state.playlists.some(t=>normalizeAdminId(t.id)===track.id),6))throw new Error('Трек не подтверждён таблицей');
-        toast('✅ Трек и файл сохранены');renderPlaylistTracks(bookId);render();
-      }catch(e){toast('❌ '+(e.message||'Ошибка'));}
+    async function deleteBook(id) {
+      id = normalizeAdminId(id);
+      if (!id || !confirm("Удалить книгу?")) return;
+      try {
+        await apiPost({action:'delete_book', book_id:id});
+        state.books = state.books.filter(b=>normalizeAdminId(b.id)!==id); persistLocal();
+        toast('🗑️ Книга удалена из Google Таблицы'); adminTab('books'); render();
+      } catch(e) { toast('❌ '+(e.message||'Ошибка удаления')); }
     }
-    async function removeTrackFromPlaylist(id){
-      if(!confirm('Удалить трек из таблицы?'))return;
-      try{await apiPost({action:'delete_playlist',id:normalizeAdminId(id)});if(!await refreshFromSheetsAfterWrite(()=>!state.playlists.some(t=>normalizeAdminId(t.id)===normalizeAdminId(id)),6))throw new Error('Удаление не подтверждено');toast('🗑️ Трек удалён');renderAdminPlaylists(document.getElementById('adminTabContent'));}catch(e){toast('❌ '+(e.message||'Ошибка'));}
-    }
-
-    // ---------- АНОНС ----------
-    function renderAdminAnnounce(container){
-      const a=state.announcements[0]||{};
-      container.innerHTML=`
+    function editBook(id) {
+      id = normalizeAdminId(id);
+      const book = state.books.find(b => normalizeAdminId(b.id) === id);
+      if (!book) {
+        return;
+      }
+      const container = document.getElementById(
+        "adminTabContent"
+      );
+      container.innerHTML = `
         <div class="admin-box">
-          <h3 style="color:var(--silver2);margin-top:0">📢 Анонс</h3>
-          <input type="text" id="annTitle" class="admin-input" value="${h(a.title||'')}" placeholder="Название">
-          <input type="text" id="annAuthor" class="admin-input" value="${h(a.author||'')}" placeholder="Автор">
-          <textarea id="annTeaser" class="admin-input" rows="4" placeholder="Тизер">${h(a.teaser||'')}</textarea>
-          <input type="date" id="annDate" class="admin-input" value="${h(a.release_date||'')}">
-          <input type="text" id="annEmoji" class="admin-input" value="${h(a.cover_emoji||'🌙')}" placeholder="Эмодзи">
-          <input type="file" id="annCoverFile" class="admin-input" accept="image/*">
-          <button class="btn primary" onclick="saveAnnounceFull()" style="width:100%">💾 Сохранить анонс</button>
-        </div>`;
+          <h3 style="color:var(--silver2);">
+            ✏️ Редактировать: ${h(book.title)}
+          </h3>
+          <input type="text" id="editTitle" class="admin-input"
+                 value="${h(book.title)}" placeholder="Название">
+          <input type="text" id="editAuthor" class="admin-input"
+                 value="${h(book.author)}" placeholder="Автор">
+          <input type="text" id="editTrops" class="admin-input"
+                 value="${(Array.isArray(book.trops)
+                   ? book.trops
+                   : arr(book.trops)
+                 ).join(", ")}" placeholder="Тропы">
+          <input type="text" id="editTriggers" class="admin-input"
+                 value="${(Array.isArray(book.triggers)
+                   ? book.triggers
+                   : arr(book.triggers)
+                 ).join(", ")}" placeholder="Триггеры">
+          <textarea id="editDescription" class="admin-input" rows="3"
+                    placeholder="Аннотация">${h(book.description)}</textarea>
+          <input type="text" id="editCover" class="admin-input"
+                 value="${h(book.cover_emoji)}" placeholder="Обложка (эмодзи)">
+          <input type="text" id="editCoverUrl" class="admin-input"
+                 value="${h(book.cover_url || "")}" placeholder="Прямая ссылка на обложку">
+          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Заменить файл обложки</label>
+          <input type="file" id="editCoverFile" class="admin-input" accept="image/*">
+          <input type="text" id="editSeries" class="admin-input"
+                 value="${h(book.series || "")}" placeholder="Серия">
+          <input type="text" id="editSeriesOrder" class="admin-input"
+                 value="${h(book.series_order || "")}" placeholder="Номер в серии">
+          <input type="date" id="editReleaseDate" class="admin-input"
+                 value="${h(book.release_date || "")}">
+          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
+          <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
+          <button class="btn primary" onclick="saveEditBook(${JSON.stringify(String(id))})"
+                  style="width:100%;margin-top:8px;">
+            💾 Сохранить изменения
+          </button>
+          <button class="btn" onclick="adminTab('books')"
+                  style="width:100%;margin-top:4px;">
+            ↩️ Назад
+          </button>
+        </div>
+      `;
     }
-    async function saveAnnounceFull(){
-      const id=normalizeAdminId(state.announcements[0]?.id||('announcement_'+Date.now()));
-      const data={id,title:document.getElementById('annTitle').value.trim()||'Скоро',author:document.getElementById('annAuthor').value.trim(),teaser:document.getElementById('annTeaser').value.trim(),release_date:document.getElementById('annDate').value,active:'TRUE',cover_emoji:document.getElementById('annEmoji').value.trim()||'🌙'};
-      try{
-        await apiPost({action:'save_announcement',announcement:data});
-        if(!await refreshFromSheetsAfterWrite(()=>state.announcements.some(a=>normalizeAdminId(a.id)===id),6))throw new Error('Анонс не подтверждён таблицей');
-        const f=document.getElementById('annCoverFile');
-        if(f?.files?.length){const x=await fileToBase64(f);toast('⏳ Загружаю изображение анонса…');await apiPost({action:'upload_announcement_file',announcement_id:id,file_name:x.file.name,mime_type:x.file.type||'image/jpeg',file_base64:x.base64},90000);}
-        await refreshFromSheetsAfterWrite(()=>state.announcements.some(a=>normalizeAdminId(a.id)===id),6);
-        toast('✅ Анонс и файл сохранены');renderAdminAnnounce(document.getElementById('adminTabContent'));render();
-      }catch(e){toast('❌ '+(e.message||'Ошибка'));}
+    async function saveEditBook(id) {
+      id = normalizeAdminId(id);
+      const book = state.books.find(b=>normalizeAdminId(b.id)===id);
+      if (!book) { toast('❌ Книга не найдена'); return; }
+      try {
+        const data = {
+          id:id, title:document.getElementById('editTitle').value||'Без названия',
+          author:document.getElementById('editAuthor').value||'Неизвестный автор',
+          trops:document.getElementById('editTrops').value.split(',').map(t=>t.trim()).filter(Boolean),
+          triggers:document.getElementById('editTriggers').value.split(',').map(t=>t.trim()).filter(Boolean),
+          description:document.getElementById('editDescription').value||'Описание пока не добавлено.',
+          cover_emoji:document.getElementById('editCover').value||'📖',
+          cover_url:document.getElementById('editCoverUrl')?.value||'',
+          series:document.getElementById('editSeries').value||null,
+          series_order:document.getElementById('editSeriesOrder')?.value||'',
+          release_date:document.getElementById('editReleaseDate')?.value||''
+        };
+        await apiPost({action:'update_book', book:data});
+        toast('⏳ Проверяю сохранение изменений…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => {
+            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            return !!current &&
+              current.title === data.title &&
+              current.author === data.author &&
+              current.description === data.description;
+          }
+        );
+        if (!saved) throw new Error('Google Таблица не подтвердила изменение книги');
+        const coverInput=document.getElementById('editCoverFile');
+        if(coverInput?.files?.length){
+          toast('⏳ Загружаю новую обложку…');
+          await uploadCover(id,coverInput);
+          await refreshFromSheetsAfterWrite(() => state.books.some(b => normalizeAdminId(b.id) === id && !!b.cover_url));
+        }
+        const fileInput=document.getElementById('editEpub');
+        if(fileInput?.files?.length){
+          toast('⏳ Загружаю новый EPUB…');
+          await uploadEpub(id,fileInput);
+          await refreshFromSheetsAfterWrite(
+            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
+          );
+        }
+        toast('✅ Изменения сохранены в Google Таблицу'); adminTab('books'); render();
+      } catch(e){ toast('❌ '+(e.message||'Не удалось сохранить')); }
     }
-
-    // ---------- СТАТИСТИКА ----------
-    function renderAdminStats(container){
-      container.innerHTML=`<div class="admin-box"><h3 style="color:var(--silver2);margin-top:0">📊 Статистика</h3>${state.books.map(b=>`<div class="admin-item"><div><div class="admin-item-title">${h(b.title)}</div><div class="admin-item-sub">👁 ${getViews(b.id)} · ⬇ ${getDownloads(b.id)} · ⭐ ${getBookRating(b).toFixed(1)} (${getRatingCount(b.id)})</div></div></div>`).join('')}</div>`;
+    // ---- ЦИТАТЫ ----
+    function editQuotes(id) {
+      id=normalizeAdminId(id);
+      const book = state.books.find(b => normalizeAdminId(b.id) === id);
+      if (!book) {
+        return;
+      }
+      let qArr = Array.isArray(book.quotes)
+        ? book.quotes
+        : arr(book.quotes);
+      const container = document.getElementById(
+        "adminTabContent"
+      );
+      container.innerHTML = `
+        <div class="admin-box">
+          <h3 style="color:var(--silver2);">
+            💬 Цитаты: ${h(book.title)}
+          </h3>
+          <div id="quotesList">
+            ${qArr.length === 0
+              ? '<div style="color:var(--muted);padding:8px 0;">Цитат пока нет.</div>'
+              : ''
+            }
+            ${qArr.map((q, i) =>
+              `<div style="display:flex;gap:8px;align-items:center;margin:4px 0;">
+                <span style="color:var(--muted);font-size:12px;min-width:24px;">
+                  ${i + 1}.
+                </span>
+                <input type="text" class="admin-input quote-input"
+                       value="${h(q)}" style="flex:1;" data-index="${i}">
+                <button class="admin-btn danger"
+                        onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+                  ✕
+                </button>
+              </div>`
+            ).join('')}
+          </div>
+          <button class="btn" onclick="addQuoteField(${JSON.stringify(String(id))})"
+                  style="width:100%;margin:8px 0;">
+            ➕ Добавить цитату
+          </button>
+          <button class="btn primary" onclick="saveQuotes(${JSON.stringify(String(id))})"
+                  style="width:100%;">
+            💾 Сохранить все цитаты
+          </button>
+          <button class="btn" onclick="adminTab('books')"
+                  style="width:100%;margin-top:4px;">
+            ↩️ Назад
+          </button>
+        </div>
+      `;
+    }
+    function addQuoteField(id) {
+      const list = document.getElementById("quotesList");
+      const idx = list.querySelectorAll('.quote-input').length;
+      const div = document.createElement('div');
+      div.style.cssText =
+        "display:flex;gap:8px;align-items:center;margin:4px 0;";
+      div.innerHTML = `
+        <span style="color:var(--muted);font-size:12px;min-width:24px;">
+          ${idx + 1}.
+        </span>
+        <input type="text" class="admin-input quote-input"
+               placeholder="Введите цитату..." style="flex:1;"
+               data-index="${idx}">
+        <button class="admin-btn danger"
+                onclick="removeQuote(this, ${JSON.stringify(String(id))})">
+          ✕
+        </button>
+      `;
+      list.appendChild(div);
+    }
+    function removeQuote(btn, id) {
+      const div = btn.closest('div');
+      if (div && div.parentNode) {
+        div.remove();
+        const list = document.getElementById("quotesList");
+        const items = list.querySelectorAll('div');
+        items.forEach((el, i) => {
+          const num = el.querySelector('span:first-child');
+          if (num) {
+            num.textContent = `${i + 1}.`;
+          }
+        });
+      }
+    }
+    async function saveQuotes(id) {
+      id=normalizeAdminId(id);
+      const book=state.books.find(b=>normalizeAdminId(b.id)===id); if(!book)return;
+      const quotes=[...document.querySelectorAll('.quote-input')].map(x=>x.value.trim()).filter(Boolean);
+      try {
+        await apiPost({action:'update_book', book:{id:id, quotes:quotes}});
+        toast('⏳ Проверяю цитаты в Google Таблице…');
+        const saved = await refreshFromSheetsAfterWrite(
+          () => {
+            const current = state.books.find(b => normalizeAdminId(b.id) === id);
+            const currentQuotes = Array.isArray(current?.quotes) ? current.quotes : arr(current?.quotes);
+            return JSON.stringify(currentQuotes) === JSON.stringify(quotes);
+          }
+        );
+        if (!saved) throw new Error('Цитаты не появились в Google Таблице');
+        const current = state.books.find(b => normalizeAdminId(b.id) === id);
+        if (current) current.quotes = quotes;
+        toast(`✅ ${quotes.length} цитат сохранено`); adminTab('books'); render();
+      } catch(e){ toast('❌ '+(e.message||'Ошибка сохранения цитат')); }
+    }
+    // ---- ПЛЕЙЛИСТЫ ----
+    function renderAdminPlaylists(container) {
+      let html = `
+        <h3 style="color:var(--silver2);">🎵 Плейлисты</h3>
+        <div style="margin-bottom:12px;">
+          <select id="playlistBookSelect" class="admin-input">
+            <option value="">Выберите книгу</option>
+            ${state.books.map(b =>
+              `<option value="${b.id}">
+                ${b.cover_emoji || "📖"} ${h(b.title)}
+              </option>`
+            ).join('')}
+          </select>
+          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🎧 Аудиофайл — автоматически в Google Drive</label>
+          <input type="file" id="trackFile" class="admin-input" accept="audio/*,.mp3,.m4a,.ogg,.wav">
+          <input type="text" id="trackUrl" class="admin-input" placeholder="Или прямая ссылка на MP3">
+          <button class="btn primary" onclick="addTrackToPlaylist()"
+                  style="width:100%;margin-top:6px;">
+            ➕ Добавить трек
+          </button>
+        </div>
+        <div id="playlistTracks"></div>
+      `;
+      container.innerHTML = html;
+      document.getElementById("playlistBookSelect")
+        .addEventListener("change", function() {
+          renderPlaylistTracks(this.value);
+        });
+    }
+    function renderPlaylistTracks(bookId) {
+      const container = document.getElementById(
+        "playlistTracks"
+      );
+      if (!bookId) {
+        container.innerHTML =
+          '<div style="color:var(--muted);padding:12px;">Выберите книгу</div>';
+        return;
+      }
+      const tracks = state.playlists.filter(p =>
+        String(p.book_id) === String(bookId)
+      );
+      if (!tracks.length) {
+        container.innerHTML =
+          '<div style="color:var(--muted);padding:12px;">Нет треков для этой книги</div>';
+        return;
+      }
+      container.innerHTML = tracks.map((t, i) =>
+        `<div class="admin-item">
+          <div>
+            <div class="admin-item-title">
+              ${i + 1}. ${h(t.track_name || "Без названия")}
+            </div>
+            <div class="admin-item-sub">
+              ${h(t.artist || "—")}
+            </div>
+          </div>
+          <button class="admin-btn danger"
+                  onclick="removeTrackFromPlaylist('${t.id}')">
+            🗑️
+          </button>
+        </div>`
+      ).join('');
+    }
+    async function addTrackToPlaylist() {
+      const bookId=document.getElementById('playlistBookSelect').value; if(!bookId){toast('Выберите книгу');return;}
+      const trackName=prompt('Название трека:'); if(!trackName)return;
+      const artist=prompt('Исполнитель:')||'—';
+      try {
+        let url=(document.getElementById('trackUrl')?.value||'').trim();
+        const file=document.getElementById('trackFile');
+        if(file?.files?.length){
+          const f=file.files[0];
+          if(f.size>20*1024*1024) throw new Error('Аудиофайл слишком большой. Максимум 20 МБ.');
+          const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(f);});
+          toast('⏳ Загружаю музыку в Google Drive…');
+          const trackId='track_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+          await apiPost({action:'upload_audio',id:trackId,book_id:bookId,track_name:trackName,artist:artist,file_name:f.name,mime_type:f.type||'audio/mpeg',file_base64:base64,mood:''});
+          await refreshFromSheetsAfterWrite(()=>state.playlists.some(t=>normalizeAdminId(t.id)===trackId),6);
+        } else {
+          if(!url) throw new Error('Выберите аудиофайл или укажите ссылку');
+          const newTrack={id:'track_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),book_id:bookId,track_name:trackName,artist:artist,file_url:url,mood:''};
+          await apiPost({action:'add_playlist',playlist:newTrack});
+          await refreshFromSheetsAfterWrite(()=>state.playlists.some(t=>normalizeAdminId(t.id)===newTrack.id),6);
+        }
+        toast('✅ Трек и файл сохранены'); renderPlaylistTracks(bookId);
+      } catch(e){toast('❌ '+(e.message||'Ошибка сохранения трека'));}
+    }
+    async function removeTrackFromPlaylist(trackId) {
+      if(!confirm('Удалить трек?'))return;
+      try { await apiPost({action:'delete_playlist',id:normalizeAdminId(trackId)}); state.playlists=state.playlists.filter(t=>normalizeAdminId(t.id)!==normalizeAdminId(trackId)); persistLocal(); toast('🗑️ Трек удалён из Google Таблицы'); const select=document.getElementById('playlistBookSelect'); if(select)renderPlaylistTracks(select.value); }
+      catch(e){toast('❌ '+(e.message||'Ошибка удаления'));}
+    }
+    // ---- АНОНСЫ ----
+    function renderAdminAnnounce(container) {
+      const a = state.announcements[0] || {
+        title: "",
+        author: "",
+        teaser: "",
+        release_date: "",
+        active: "TRUE"
+      };
+      container.innerHTML = `
+        <div class="admin-box">
+          <h3 style="color:var(--silver2);">📢 Анонс</h3>
+          <input type="text" id="annTitle" class="admin-input"
+                 value="${h(a.title)}" placeholder="Название">
+          <input type="text" id="annAuthor" class="admin-input"
+                 value="${h(a.author)}" placeholder="Автор">
+          <input type="text" id="annTeaser" class="admin-input"
+                 value="${h(a.teaser)}" placeholder="Тизер">
+          <input type="date" id="annDate" class="admin-input"
+                 value="${a.release_date || ""}">
+          <button class="btn primary" onclick="saveAnnounce()"
+                  style="width:100%;margin-top:8px;">
+            💾 Сохранить анонс
+          </button>
+        </div>
+      `;
+    }
+    async function saveAnnounce() {
+      const data={id:normalizeAdminId(state.announcements[0]?.id||'1'),title:document.getElementById('annTitle').value||'Скоро',author:document.getElementById('annAuthor').value||'',teaser:document.getElementById('annTeaser').value||'Новая книга скоро появится.',release_date:document.getElementById('annDate').value||'',active:'TRUE',cover_emoji:'🌙'};
+      try { await apiPost({action:'save_announcement',announcement:data}); state.announcements=[data]; persistLocal(); toast('✅ Анонс сохранён в Google Таблицу'); adminTab('announce'); render(); }
+      catch(e){toast('❌ '+(e.message||'Ошибка сохранения анонса'));}
+    }
+    // ---- СТАТИСТИКА ----
+    function renderAdminStats(container) {
+      let html = `<h3 style="color:var(--silver2);">📊 Статистика</h3>`;
+      state.books.forEach(book => {
+        const views = getViews(book.id);
+        const downloads = getDownloads(book.id);
+        const rating = getBookRating(book);
+        html += `
+          <div class="admin-item">
+            <div>
+              <div class="admin-item-title">
+                ${book.cover_emoji || "📖"} ${h(book.title)}
+              </div>
+              <div class="admin-item-sub">
+                👁️ ${views} просмотров ·
+                ⬇️ ${downloads} скачиваний ·
+                ⭐ ${rating.toFixed(1)}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
     }
   </script>
 </body>
