@@ -1198,7 +1198,7 @@
   <script>
     "use strict";
     const API_URL =
-      "https://script.google.com/macros/s/AKfycbzQx7rBsgE6bcc6vfl0HsMaJXZ_kUNJnVbgeezyJKhre1B74COrfXAc1PTzyPSTjcLxkA/exec";
+      "https://script.google.com/macros/s/AKfycbwz103KcfHIR77926wkQjjySVS-ZpLbfBeHhuBXdvZ9yOsr9-tYtSxpize4asgzSeoSxA/exec";
     const SHEETS = {
       books: API_URL + "?action=books",
       playlists: API_URL + "?action=playlists",
@@ -2785,7 +2785,7 @@
           <p><b>MidnightBooks</b> — библиотека готовых переводов, собранная в удобном формате мини-приложения.</p>
           <p>Здесь можно искать книги, сохранять их в избранное, отмечать прогресс чтения, ставить оценки и слушать добавленные плейлисты.</p>
           <p style="color:var(--muted);font:12px Arial">
-            Данные библиотеки загружаются из таблиц, а пользовательские оценки, статусы, избранное и локальная статистика сохраняются на устройстве.
+            Книги, файлы, обложки, музыка, анонсы, оценки и общая статистика хранятся в Google Таблице и Google Drive. Избранное и личный статус чтения остаются локальными для пользователя.
           </p>
         </div>
         <div class="action-row">
@@ -3357,8 +3357,14 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-        state.books = state.books.filter(b=>getAdminBookId(b)!==id); persistLocal();
-        toast('🗑️ Книга удалена из Google Таблицы'); adminTab('books'); render();
+        toast('⏳ Проверяю удаление в Google Таблице…');
+        const removed = await refreshFromSheetsAfterWrite(
+          () => !state.books.some(b => getAdminBookId(b) === id)
+        );
+        if (!removed) throw new Error('Google Таблица не подтвердила удаление книги');
+        toast('🗑️ Книга удалена из Google Таблицы');
+        adminTab('books');
+        render();
       } catch(e) { toast('❌ '+(e.message||'Ошибка удаления')); }
     }
     function findAdminBook(id) {
@@ -3665,7 +3671,17 @@
     }
     async function removeTrackFromPlaylist(trackId) {
       if(!confirm('Удалить трек?'))return;
-      try { await apiPost({action:'delete_playlist',id:normalizeAdminId(trackId)}); state.playlists=state.playlists.filter(t=>normalizeAdminId(t.id)!==normalizeAdminId(trackId)); persistLocal(); toast('🗑️ Трек удалён из Google Таблицы'); const select=document.getElementById('playlistBookSelect'); if(select)renderPlaylistTracks(select.value); }
+      try {
+        const id = normalizeAdminId(trackId);
+        await apiPost({action:'delete_playlist',id:id});
+        const removed = await refreshFromSheetsAfterWrite(
+          () => !state.playlists.some(t => normalizeAdminId(t.id) === id)
+        );
+        if (!removed) throw new Error('Google Таблица не подтвердила удаление трека');
+        toast('🗑️ Трек удалён из Google Таблицы');
+        const select=document.getElementById('playlistBookSelect');
+        if(select) renderPlaylistTracks(select.value);
+      }
       catch(e){toast('❌ '+(e.message||'Ошибка удаления'));}
     }
     // ---- АНОНСЫ ----
@@ -3697,7 +3713,16 @@
     }
     async function saveAnnounce() {
       const data={id:normalizeAdminId(state.announcements[0]?.id||'1'),title:document.getElementById('annTitle').value||'Скоро',author:document.getElementById('annAuthor').value||'',teaser:document.getElementById('annTeaser').value||'Новая книга скоро появится.',release_date:document.getElementById('annDate').value||'',active:'TRUE',cover_emoji:'🌙'};
-      try { await apiPost({action:'save_announcement',announcement:data}); state.announcements=[data]; persistLocal(); toast('✅ Анонс сохранён в Google Таблицу'); adminTab('announce'); render(); }
+      try {
+        await apiPost({action:'save_announcement',announcement:data});
+        const saved = await refreshFromSheetsAfterWrite(
+          () => state.announcements.some(a => String(a.id) === String(data.id))
+        );
+        if (!saved) throw new Error('Google Таблица не подтвердила сохранение анонса');
+        toast('✅ Анонс сохранён в Google Таблицу');
+        adminTab('announce');
+        render();
+      }
       catch(e){toast('❌ '+(e.message||'Ошибка сохранения анонса'));}
     }
     // ---- СТАТИСТИКА ----
