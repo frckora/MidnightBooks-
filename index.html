@@ -3184,77 +3184,52 @@
       return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(String(STATS_API || '').trim());
     }
     async function apiPost(payload) {
-      if (!apiReady()) {
-        throw new Error("Не настроен URL Apps Script");
-      }
+      if (!apiReady()) throw new Error("Не настроен URL Apps Script");
 
-      const body = "data=" + encodeURIComponent(JSON.stringify(payload));
+      // Не используем no-cors fetch: он подтверждает отправку раньше,
+      // чем Apps Script реально записывает данные.
+      return await new Promise((resolve, reject) => {
+        const iframeName = "mbApiFrame_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        const iframe = document.createElement("iframe");
+        iframe.name = iframeName;
+        iframe.style.display = "none";
+        document.body.appendChild(iframe);
 
-      // Apps Script Web App не даёт браузеру прочитать обычный POST-ответ
-      // из-за CORS. Поэтому запись отправляется no-cors, а результат
-      // подтверждается отдельным JSONP GET через refreshFromSheetsAfterWrite().
-      try {
-        await fetch(STATS_API, {
-          method: "POST",
-          mode: "no-cors",
-          cache: "no-store",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-          },
-          body
-        });
-        return { ok: true, submitted: true };
-      } catch (fetchError) {
-        // Надёжный запасной способ для Telegram WebView.
-        return await new Promise((resolve, reject) => {
-          const iframeName =
-            "mbApiFrame_" + Date.now() + "_" +
-            Math.random().toString(36).slice(2);
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = STATS_API;
+        form.target = iframeName;
+        form.enctype = "application/x-www-form-urlencoded";
+        form.style.display = "none";
 
-          const iframe = document.createElement("iframe");
-          iframe.name = iframeName;
-          iframe.style.display = "none";
-          document.body.appendChild(iframe);
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "data";
+        input.value = JSON.stringify(payload);
+        form.appendChild(input);
+        document.body.appendChild(form);
 
-          const form = document.createElement("form");
-          form.method = "POST";
-          form.action = STATS_API;
-          form.target = iframeName;
-          form.enctype = "application/x-www-form-urlencoded";
-          form.style.display = "none";
+        let done = false;
+        const cleanup = () => {
+          try { form.remove(); } catch {}
+          try { iframe.remove(); } catch {}
+        };
+        const finish = () => {
+          if (done) return;
+          done = true;
+          setTimeout(cleanup, 1000);
+          resolve({ ok:true, submitted:true });
+        };
 
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = "data";
-          input.value = JSON.stringify(payload);
-          form.appendChild(input);
-          document.body.appendChild(form);
-
-          let done = false;
-          const cleanup = () => {
-            try { form.remove(); } catch {}
-            try { iframe.remove(); } catch {}
-          };
-
-          const timer = setTimeout(() => {
-            if (done) return;
-            done = true;
-            cleanup();
-            resolve({ ok: true, submitted: true });
-          }, 5000);
-
-          try {
-            form.submit();
-          } catch (e) {
-            clearTimeout(timer);
-            if (!done) {
-              done = true;
-              cleanup();
-              reject(e);
-            }
-          }
-        });
-      }
+        try {
+          form.submit();
+          // На iPhone Telegram событие iframe load бывает нестабильным.
+          setTimeout(finish, 1800);
+        } catch (e) {
+          cleanup();
+          reject(e);
+        }
+      });
     }
 
     async function refreshFromSheetsAfterWrite(checkFn) {
@@ -3472,8 +3447,9 @@
         } else {
           toast('✅ Книга сохранена в Google Таблицу');
         }
-        // Один контролируемый refresh только после завершения ВСЕХ записей.
-        try { await refreshFromSheetsAfterWrite(); } catch (e) { console.warn(e); }
+        // Не перезаписываем state сразу данными bootstrap: Google Sheets/App Script
+        // может вернуть старую версию таблицы и удалить только что добавленные книги из интерфейса.
+        persistLocal();
         adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
@@ -3482,10 +3458,8 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-                const removed = await refreshFromSheetsAfterWrite(
-          () => !state.books.some(b => getAdminBookId(b) === id)
-        );
-        // Ответ API уже подтвердил удаление.
+        state.books = state.books.filter(b => getAdminBookId(b) !== id);
+        persistLocal();
         toast('🗑️ Книга удалена из Google Таблицы');
         adminTab('books');
         render();
@@ -3493,7 +3467,10 @@
     }
     function findAdminBook(id) {
       const wanted = normalizeAdminId(id);
-      return state.books.find(b => getAdminBookId(b) === wanted);
+      return state.books.find(b => {
+        const current = normalizeAdminId(getAdminBookId(b));
+        return current === wanted;
+      }) || null;
     }
 
     function editBook(id) {
@@ -3631,13 +3608,9 @@
           await uploadEpub(id, fileInput);
         }
 
-        // После всех операций ждём один последовательный refresh.
-        await new Promise(resolve => setTimeout(resolve, 700));
-        try {
-          await refreshFromSheetsAfterWrite();
-        } catch (e) {
-          console.warn('Не удалось обновить данные после редактирования:', e);
-        }
+        // Не делаем bootstrap сразу после POST: он мог вернуть старый снимок
+        // и из-за этого книги исчезали из state.
+        persistLocal();
 
         toast('✅ Изменения сохранены');
         adminTab('books');
