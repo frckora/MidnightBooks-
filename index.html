@@ -1197,17 +1197,43 @@
   <div id="toast" class="toast"></div>
   <script>
     "use strict";
+
+    // Telegram WebApp: безопасная инициализация для Telegram и обычного браузера.
+    const TelegramApp = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    if (TelegramApp) {
+      try { TelegramApp.ready(); TelegramApp.expand(); } catch (e) { console.warn('Telegram init:', e); }
+    }
+    function haptic(type = 'light') {
+      try {
+        const hf = TelegramApp && TelegramApp.HapticFeedback;
+        if (!hf) return;
+        if (type === 'success' || type === 'error' || type === 'warning') hf.notificationOccurred(type);
+        else hf.impactOccurred(type);
+      } catch (e) { console.warn('Haptic:', e); }
+    }
+    function updateTelegramBackButton() {
+      try {
+        const back = TelegramApp && TelegramApp.BackButton;
+        if (!back) return;
+        const modalOpen = !!document.querySelector('#modal.show, #modal:not([hidden])');
+        if (modalOpen) back.show(); else back.hide();
+      } catch (e) {}
+    }
+    if (TelegramApp && TelegramApp.BackButton) {
+      try { TelegramApp.BackButton.onClick(() => closeModal()); } catch (e) {}
+    }
+
     const API_URL =
-      "https://script.google.com/macros/s/AKfycbw3B6zYIjkYY96OiNMyXoo4YlEh-I4FJMzhAkM1vaBvZWihMM80SDgLcHGKT1wDzpyixg/exec";
+      "https://script.google.com/macros/s/AKfycbzzotn8FKuFsXaQs_xGJXlJ9ZP_PSvX6fSVyUPJfZXrVmncRheipreyfJEshc0MT5cIoQ/exec";
     const SHEETS = {
-      books: API_URL + "?action=getBootstrap",
-      playlists: API_URL + "?action=getBootstrap",
-      files: API_URL + "?action=getBootstrap",
-      covers: API_URL + "?action=getBootstrap",
-      announcements: API_URL + "?action=getBootstrap"
+      books: API_URL + "?action=bootstrap",
+      playlists: API_URL + "?action=bootstrap",
+      files: API_URL + "?action=bootstrap",
+      covers: API_URL + "?action=bootstrap",
+      announcements: API_URL + "?action=bootstrap"
     };
     const STATS_API = API_URL;
-    const CACHE_KEY = "midnightbooks_cache_final_7_fixed";
+    const CACHE_KEY = "midnightbooks_cache_v4_apps_script";
     const ADMIN_PASSWORD = "midnight2026";
 
     const state = {
@@ -1513,7 +1539,9 @@
         series: String(raw.series ?? ""),
         series_order: String(seriesOrder),
         series_number: String(raw.series_number ?? seriesOrder),
-        trops: Array.isArray(raw.tropes) ? raw.tropes : (typeof raw.tropes === "string" ? raw.tropes.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean) : (typeof raw.trops === "string" ? raw.trops.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean) : (Array.isArray(raw.trops) ? raw.trops : []))),
+        trops: typeof raw.trops === "string"
+                ? raw.trops.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
+                : (Array.isArray(raw.trops) ? raw.trops : []),
         triggers: typeof raw.triggers === "string"
                   ? raw.triggers.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
                   : (Array.isArray(raw.triggers) ? raw.triggers : []),
@@ -1575,7 +1603,6 @@
         return "";
       }
       const preferred = [
-        row.file_url,
         row.cover_url,
         row.coverUrl,
         row.cover,
@@ -1619,9 +1646,27 @@
       }));
     }
     function applyData(data) {
+      const seenBookIds = new Set();
+
+      // Не даём пустым или случайным строкам таблицы превращаться
+      // в «Без названия» и появляться как новые книги.
       state.books = unwrap(data.books || [])
-        .map(normalizeBook);
-      state.playlists = unwrap(data.music || data.playlists || []);
+        .filter(raw => {
+          if (!raw || typeof raw !== 'object') return false;
+          const id = String(raw.id ?? raw.book_id ?? raw.bookId ?? '').trim();
+          const title = String(raw.title ?? raw.name ?? '').trim();
+          const author = String(raw.author ?? '').trim();
+          return !!id && (!!title || !!author);
+        })
+        .map(normalizeBook)
+        .filter(book => {
+          const id = String(book.id || '').trim();
+          if (!id || seenBookIds.has(id)) return false;
+          seenBookIds.add(id);
+          return true;
+        });
+
+      state.playlists = unwrap(data.playlists || []);
       state.files = unwrap(data.files || []);
       state.covers = unwrap(data.covers || []);
       state.announcements = unwrap(data.announcements || []);
@@ -1692,50 +1737,36 @@
       return extensionOk || (mimeOk && !!name);
     }
 
-    function extractDriveFileId(value) {
-      const raw = String(value || "").trim();
-      if (!raw) return "";
-      // Если сервер уже прислал чистый Drive ID.
-      if (/^[A-Za-z0-9_-]{10,}$/.test(raw)) return raw;
-      const patterns = [
-        /drive\.google\.com\/file\/d\/([^/?#]+)/i,
-        /[?&]id=([^&#]+)/i,
-        /drive\.usercontent\.google\.com\/download\?[^#]*[?&]id=([^&#]+)/i
-      ];
-      for (const re of patterns) {
-        const m = raw.match(re);
-        if (m && m[1]) return decodeURIComponent(m[1]);
-      }
-      return "";
-    }
+    function audioUrlCandidates(rawUrl) {
+      const url = String(rawUrl || "").trim();
+      if (!url) return [];
 
-    function audioUrlCandidates(rawUrl, driveFileId) {
-      const raw = String(rawUrl || "").trim();
-      const id = extractDriveFileId(driveFileId) || extractDriveFileId(raw);
-      const candidates = [];
+      let id = "";
 
-      // Для обычных внешних прямых ссылок сначала используем исходный URL.
-      if (raw && !id) candidates.push(raw);
+      const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i);
+      if (m) id = m[1];
 
-      // Сначала используем прямую ссылку, которую возвращает backend.
-      // Новый Apps Script сохраняет uc?export=download&id=...
-      if (raw && !/drive\.google\.com\/file\/d\//i.test(raw)) candidates.push(raw);
-
-      // Затем добавляем запасные прямые ссылки Google Drive.
-      if (id) {
-        const safeId = encodeURIComponent(id);
-        candidates.push(
-          "https://drive.usercontent.google.com/download?id=" + safeId + "&export=download&confirm=t",
-          "https://drive.google.com/uc?export=download&id=" + safeId,
-          "https://drive.google.com/uc?id=" + safeId + "&export=download"
-        );
+      if (!id) {
+        try {
+          const u = new URL(url);
+          if (/drive\.google\.com|driveusercontent\.google\.com/i.test(u.hostname)) {
+            id = u.searchParams.get("id") || "";
+          }
+        } catch (e) {}
       }
 
-      // Если сервер прислал прямую ссылку не Google Drive — оставляем её запасным вариантом.
-      if (raw && id && !/drive\.google\.com|drive\.usercontent\.google\.com/i.test(raw)) {
-        candidates.push(raw);
-      }
-      return [...new Set(candidates.filter(Boolean))];
+      // Если это не Google Drive — используем ссылку как есть.
+      if (!id) return [url];
+
+      // Для Google Drive пробуем ВСЕ варианты. Telegram WebView на iPhone
+      // и Android по-разному обрабатывает редиректы Drive.
+      return [...new Set([
+        "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
+        "https://drive.google.com/uc?id=" + encodeURIComponent(id) + "&export=download",
+        "https://drive.google.com/uc?export=open&id=" + encodeURIComponent(id),
+        "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t",
+        url
+      ])];
     }
 
     function tracksFor(bookId) {
@@ -1743,11 +1774,9 @@
         .filter(x => String(x.book_id ?? x.bookId) === String(bookId))
         .map(x => {
           const rawUrl = x.file_url ?? x.url ?? x.audio_url ?? x.fileUrl ?? "";
-          const driveId = x.drive_file_id ?? x.driveFileId ?? x.file_id ?? x.audio_file_id ?? "";
-          const urls = audioUrlCandidates(rawUrl, driveId);
+          const urls = audioUrlCandidates(rawUrl);
           return {
-            id: String(x.id ?? ""),
-            name: String(x.title ?? x.track_name ?? x.name ?? x.file_name ?? "Без названия"),
+            name: String(x.track_name ?? x.name ?? "Без названия"),
             artist: String(x.artist ?? "—"),
             url: urls[0] || "",
             urls
@@ -1774,24 +1803,31 @@
     }
     async function fetchRemote(silent = false) {
       if (!silent) showLoading();
-      const url = API_URL + "?action=getBootstrap&t=" + Date.now();
-      const response = await fetch(url, { method: "GET", cache: "no-store", redirect: "follow" });
-      if (!response.ok) throw new Error("API вернул ошибку " + response.status);
-      const data = await response.json();
-      if (data && data.success === false) throw new Error(data.error || "Ошибка API");
-      if (!Array.isArray(data.books)) throw new Error("Apps Script не вернул список книг");
-      applyData({
-        books: data.books || [],
-        files: data.files || [],
-        covers: data.covers || [],
-        playlists: data.music || [],
-        announcements: data.announcements || []
+
+      // ИСПРАВЛЕНО: один getBootstrap вместо множества несовместимых запросов.
+      const response = await fetch(API_URL + "?action=getBootstrap&t=" + Date.now(), { cache: "no-store" });
+      if (!response.ok) throw new Error("Не удалось получить данные: HTTP " + response.status);
+      const payload = await response.json();
+      if (!payload || payload.success === false) throw new Error(payload?.error || "Apps Script не вернул данные");
+
+      const data = {
+        books: Array.isArray(payload.books) ? payload.books : [],
+        covers: Array.isArray(payload.covers) ? payload.covers : [],
+        files: Array.isArray(payload.files) ? payload.files : [],
+        playlists: Array.isArray(payload.music) ? payload.music : [],
+        announcements: Array.isArray(payload.announcements) ? payload.announcements : []
+      };
+
+      applyData(data);
+      applyStatsPayload({ stats: payload.stats, ratings: payload.ratings });
+      state.books = state.books.map(book => {
+        const cover = state.covers.find(c => String(c.book_id) === String(book.id));
+        return cover ? { ...book, cover_url: cover.file_url } : book;
       });
-      if (data.stats) applyStatsPayload(data);
       persistLocal();
       render();
-      if (!silent) toast("Библиотека обновлена");
-      return data;
+      if (!silent) toast("Библиотека обновлена из Google Таблицы");
+      return payload;
     }
     function showLoading() {
       document.getElementById("main").innerHTML = '<div class="loading">Загружаем библиотеку из Google Таблицы…</div>';
@@ -1813,122 +1849,54 @@
     // =========================
     // СТАТИСТИКА
     // =========================
+    // Статистика через тот же Apps Script REST API. Старый JSONP здесь не работает.
     function applyStatsPayload(data) {
-      state.statisticsEnabled = !!data?.enabled;
-      const incoming = data?.stats || {};
+      const rows = Array.isArray(data?.stats) ? data.stats : (data?.stats ? [data.stats] : []);
+      state.statisticsEnabled = true;
       state.stats = {};
-      state.books.forEach(b => {
-        state.stats[String(b.id)] =
-          incoming[String(b.id)] ||
-          zeroStats();
+      state.books.forEach(b => state.stats[String(b.id)] = zeroStats());
+      rows.forEach(row => {
+        if (row && row.book_id != null) state.stats[String(row.book_id)] = { ...zeroStats(), ...row };
       });
-      state.userRatings = data?.my_ratings || {};
+      state.userRatings = {};
+      const ratings = Array.isArray(data?.ratings) ? data.ratings : [];
+      ratings.forEach(r => {
+        if (String(r.user_id) === String(telegramUserId())) state.userRatings[String(r.book_id)] = Number(r.rating || 0);
+      });
     }
-    function statsRequest(action, bookId = "", rating = 0) {
-      if (!statsReady()) {
-        return Promise.resolve({
-          ok: true,
-          enabled: false,
-          stats: {},
-          my_ratings: {}
-        });
+    async function statsRequest(action, bookId = "", rating = 0) {
+      if (action === 'stats') {
+        const payload = await fetchRemoteStats_();
+        applyStatsPayload(payload);
+        return payload;
       }
-      return new Promise((resolve, reject) => {
-        const cb =
-          "mbStatsCb_" +
-          Date.now() +
-          "_" +
-          Math.random()
-            .toString(36)
-            .slice(2);
-        const script = document.createElement("script");
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(new Error("stats timeout"));
-        }, 15000);
-
-        function cleanup() {
-          clearTimeout(timer);
-          try {
-            delete window[cb];
-          } catch {}
-          script.remove();
-        }
-        window[cb] = (data) => {
-          cleanup();
-          applyStatsPayload(data);
-          resolve(data);
-        };
-        const q = new URLSearchParams({
-          callback: cb,
-          action: String(action),
-          book_id: String(bookId || ""),
-          rating: String(rating || 0),
-          user_id: telegramUserId(),
-          t: String(Date.now())
-        });
-        script.src = STATS_API + "?" + q.toString();
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("stats network error"));
-        };
-        document.head.appendChild(script);
-      });
+      const map = { view: 'views', download: 'downloads', open: 'opens', favorite: 'favorites' };
+      if (action === 'rating') return apiPost({ action:'addRating', book_id:String(bookId), user_id:String(telegramUserId()), rating:Number(rating) });
+      const stat = map[action];
+      if (!stat) throw new Error('Неизвестное действие статистики');
+      return apiPost({ action:'incrementStat', book_id:String(bookId), stat:stat });
+    }
+    async function fetchRemoteStats_() {
+      const response = await fetch(API_URL + '?action=getBootstrap&t=' + Date.now(), { cache:'no-store' });
+      if (!response.ok) throw new Error('Ошибка статистики: HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload || payload.success === false) throw new Error(payload?.error || 'Ошибка статистики');
+      return payload;
     }
     async function loadStats() {
-      if (!statsReady()) {
-        state.statisticsEnabled = false;
-        state.stats = {};
-        state.userRatings = {};
-        state.books.forEach(b => {
-          state.stats[String(b.id)] = zeroStats();
-        });
-        render();
-        return;
-      }
-      try {
-        await statsRequest("stats");
-        render();
-      } catch {
-        state.statisticsEnabled = false;
-        state.stats = {};
-        state.userRatings = {};
-        state.books.forEach(b => {
-          state.stats[String(b.id)] = zeroStats();
-        });
-      }
+      try { await statsRequest('stats'); render(); }
+      catch (e) { state.statisticsEnabled = false; state.books.forEach(b => state.stats[String(b.id)] = zeroStats()); }
     }
     async function recordView(id) {
-      if (!state.statisticsEnabled) {
-        return;
-      }
-      try {
-        await statsRequest("view", id);
-        render();
-        if (state.currentBook?.id === id) {
-          showBookModal();
-        }
-      } catch {}
+      try { await statsRequest('view', id); await loadStats(); } catch (e) { console.warn('view stat', e); }
     }
     async function setUserRating(id, rating) {
-      if (!state.statisticsEnabled) {
-        toast("Статистика ещё не запущена");
-        return;
-      }
-      const r = Math.max(
-        1,
-        Math.min(5, Number(rating) || 0)
-      );
+      const r = Math.max(1, Math.min(5, Number(rating) || 0));
       try {
-        await statsRequest("rating", id, r);
-        toast("Оценка сохранена");
-        render();
-        if (state.currentBook?.id === id) {
-          showBookModal();
-        }
-      } catch {
-        toast("Не удалось сохранить оценку");
-      }
+        await statsRequest('rating', id, r);
+        haptic('success'); toast('Оценка сохранена'); await loadStats();
+        if (state.currentBook?.id === id) showBookModal();
+      } catch (e) { haptic('error'); toast('Не удалось сохранить оценку: ' + (e.message || '')); }
     }
     function toggleFavorite(id) {
       const ids = getFavoriteIds();
@@ -2798,15 +2766,7 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-        if (state.statisticsEnabled) {
-          try {
-            await statsRequest("download", book.id);
-            render();
-            if (state.currentBook?.id === book.id) {
-              showBookModal();
-            }
-          } catch {}
-        }
+        try { await statsRequest("download", book.id); await loadStats(); } catch (e) { console.warn('download stat', e); }
         toast("EPUB скачивается");
         return;
       } catch (e) {
@@ -2884,10 +2844,10 @@
     // АУДИО ПЛЕЕР
     // =========================
     function playTracks(tracks, index = 0) {
-      if (!Array.isArray(tracks) || !tracks.length) return;
+      if (!tracks.length) return;
 
       state.player.tracks = tracks;
-      state.player.index = Math.max(0, Math.min(index, tracks.length - 1));
+      state.player.index = index;
 
       if (state.player.audio) {
         try {
@@ -2897,15 +2857,15 @@
         } catch (e) {}
       }
 
-      const track = tracks[state.player.index];
+      const track = tracks[index];
       const urls = Array.isArray(track.urls) && track.urls.length
-        ? track.urls
+        ? track.urls.filter(Boolean)
         : (track.url ? [track.url] : []);
 
       if (!urls.length) {
+        toast("❌ У этого трека нет ссылки на аудиофайл");
         state.player.playing = false;
         updatePlayer();
-        toast("❌ У этого трека нет ссылки или Drive ID");
         return;
       }
 
@@ -2917,66 +2877,67 @@
 
       let urlIndex = 0;
       let finished = false;
-      let trying = false;
 
-      const setSource = (url) => {
-        a.src = url;
-        a.load();
-      };
-
-      const tryPlayCurrent = () => {
-        trying = true;
-        const result = a.play();
-        if (result && typeof result.then === "function") {
-          result.then(() => { trying = false; })
-            .catch(() => {
-              trying = false;
-              // Некоторые iOS WebView не вызывают error при неудачном play().
-              tryNextSource();
-            });
-        } else {
-          trying = false;
-        }
-      };
-
-      const tryNextSource = () => {
-        if (finished) return;
-        if (urlIndex + 1 >= urls.length) {
-          finished = true;
-          state.player.playing = false;
-          updatePlayer();
-          toast("❌ Не удалось воспроизвести аудио. Файл в Google Drive должен быть открыт для доступа по ссылке.");
+      const trySource = (indexToTry) => {
+        if (indexToTry >= urls.length) {
+          if (!finished) {
+            finished = true;
+            state.player.playing = false;
+            updatePlayer();
+            toast("❌ Не удалось открыть аудиофайл. Проблема в ссылке Google Drive, а не в MP3.");
+          }
           return;
         }
-        urlIndex += 1;
-        setSource(urls[urlIndex]);
-        tryPlayCurrent();
+
+        urlIndex = indexToTry;
+
+        try {
+          a.pause();
+          a.removeAttribute("src");
+          a.load();
+          a.src = urls[urlIndex];
+          a.load();
+
+          const promise = a.play();
+          if (promise && typeof promise.catch === "function") {
+            promise.catch(() => {
+              // Событие error обычно сработает само. Если WebView его не даёт —
+              // пробуем следующий вариант ссылки.
+              setTimeout(() => {
+                if (!finished && a.error) trySource(urlIndex + 1);
+              }, 700);
+            });
+          }
+        } catch (e) {
+          trySource(urlIndex + 1);
+        }
       };
 
       a.addEventListener("ended", () => nextTrack());
       a.addEventListener("timeupdate", updatePlayer);
       a.addEventListener("loadedmetadata", updatePlayer);
-      a.addEventListener("canplay", () => updatePlayer());
       a.addEventListener("playing", () => {
+        finished = false;
         state.player.playing = true;
         updatePlayer();
       });
       a.addEventListener("pause", () => {
-        if (!a.ended && !finished) {
+        if (!a.ended) {
           state.player.playing = false;
           updatePlayer();
         }
       });
+
       a.addEventListener("error", () => {
-        if (!trying) tryNextSource();
+        if (!finished) trySource(urlIndex + 1);
       });
 
       state.player.audio = a;
       state.player.playing = false;
-      setSource(urls[urlIndex]);
-      tryPlayCurrent();
+      trySource(0);
       updatePlayer();
     }
+
     function nextTrack() {
       const p = state.player;
       if (!p.tracks.length) {
@@ -3190,85 +3151,64 @@
       return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(String(STATS_API || '').trim());
     }
     async function apiPost(payload) {
-      if (!apiReady()) {
-        throw new Error("Не настроен URL Apps Script");
+      if (!apiReady()) throw new Error("Не настроен URL Apps Script");
+
+      const p = { ...payload };
+      const oldAction = p.action;
+
+      // Адаптер старого интерфейса MidnightBooks к новому Apps Script.
+      if (oldAction === "add_book") {
+        Object.assign(p, p.book || {});
+        delete p.book;
+        p.action = "addBook";
+      } else if (oldAction === "update_book") {
+        Object.assign(p, p.book || {});
+        delete p.book;
+        p.action = "updateBook";
+      } else if (oldAction === "delete_book") {
+        p.id = p.book_id || p.id;
+        p.action = "deleteBook";
+      } else if (["upload_cover","upload_epub","upload_audio"].includes(oldAction)) {
+        p.file_data = p.file_base64 || p.file_data;
+        p.file_type = oldAction === "upload_audio" ? "audio" :
+                      oldAction === "upload_cover" ? "image" : "book";
+        delete p.file_base64;
+        p.action = oldAction === "upload_cover" ? "uploadCover" : oldAction === "upload_audio" ? "uploadMusic" : "uploadFile";
+      } else if (oldAction === "delete_playlist") {
+        p.action = "deleteMusic";
+      } else if (oldAction === "save_announcement") {
+        Object.assign(p, p.announcement || {});
+        delete p.announcement;
+        if (p.id && p.id !== "1") p.action = "updateAnnouncement";
+        else { delete p.id; p.action = "addAnnouncement"; }
+        p.text = p.text || p.teaser || "";
+        p.status = p.active === "FALSE" ? "inactive" : "active";
+      } else if (oldAction === "add_playlist") {
+        throw new Error("Прямая ссылка на музыку не поддерживается сервером. Загрузите аудиофайл.");
       }
 
-      // Новый Apps Script принимает JSON напрямую и использует flat-поля.
-      const actionMap = {
-        add_book: "addBook", update_book: "updateBook", delete_book: "deleteBook",
-        upload_cover: "uploadCover", upload_epub: "uploadFile", upload_audio: "uploadMusic"
-      };
-      const bodyPayload = Object.assign({}, payload.book || payload);
-      bodyPayload.action = actionMap[payload.action] || payload.action;
-      if (payload.book_id !== undefined) bodyPayload.book_id = payload.book_id;
-      if (payload.file_base64) bodyPayload.file_data = payload.file_base64;
-      if (payload.file_data) bodyPayload.file_data = payload.file_data;
-      const body = JSON.stringify(bodyPayload);
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(p)
+      });
 
-      // Apps Script Web App не даёт браузеру прочитать обычный POST-ответ
-      // из-за CORS. Поэтому запись отправляется no-cors, а результат
-      // подтверждается отдельным JSONP GET через refreshFromSheetsAfterWrite().
-      try {
-        await fetch(STATS_API, {
-          method: "POST",
-          mode: "no-cors",
-          cache: "no-store",
-          headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          body
-        });
-        return { ok: true, submitted: true };
-      } catch (fetchError) {
-        // Надёжный запасной способ для Telegram WebView.
-        return await new Promise((resolve, reject) => {
-          const iframeName =
-            "mbApiFrame_" + Date.now() + "_" +
-            Math.random().toString(36).slice(2);
-
-          const iframe = document.createElement("iframe");
-          iframe.name = iframeName;
-          iframe.style.display = "none";
-          document.body.appendChild(iframe);
-
-          const form = document.createElement("form");
-          form.method = "POST";
-          form.action = STATS_API;
-          form.target = iframeName;
-          form.enctype = "application/x-www-form-urlencoded";
-          form.style.display = "none";
-
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = "data";
-          input.value = JSON.stringify(payload);
-          form.appendChild(input);
-          document.body.appendChild(form);
-
-          let done = false;
-          const cleanup = () => {
-            try { form.remove(); } catch {}
-            try { iframe.remove(); } catch {}
-          };
-
-          const timer = setTimeout(() => {
-            if (done) return;
-            done = true;
-            cleanup();
-            resolve({ ok: true, submitted: true });
-          }, 5000);
-
-          try {
-            form.submit();
-          } catch (e) {
-            clearTimeout(timer);
-            if (!done) {
-              done = true;
-              cleanup();
-              reject(e);
-            }
-          }
-        });
+      if (!response.ok) {
+        throw new Error("Ошибка сервера: HTTP " + response.status);
       }
+
+      const result = await response.json();
+
+      if (!result || result.success === false || result.ok === false) {
+        throw new Error(result?.error || "Сервер не подтвердил сохранение");
+      }
+
+      // Приводим новый ответ к формату, который ожидает старый интерфейс.
+      if (result.book && !result.id) {
+        result.id = result.book.id;
+      }
+
+      return result;
     }
 
     async function refreshFromSheetsAfterWrite(checkFn) {
@@ -3406,7 +3346,7 @@
           <textarea id="newDescription" class="admin-input" rows="3"
                     placeholder="Аннотация"></textarea>
           <input type="text" id="newCover" class="admin-input"
-                 placeholder="Резервный символ (необязательно)">
+                 placeholder="Обложка (эмодзи)">
           <input type="text" id="newCoverUrl" class="admin-input"
                  placeholder="Прямая ссылка на обложку (необязательно)">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Файл обложки</label>
@@ -3470,22 +3410,25 @@
         }
         persistLocal();
         toast('⏳ Загружаю дополнительные файлы…');
-        refreshFromSheetsAfterWrite();
+        // Не запускаем параллельный refresh: он мог вернуть старый снимок
+        // таблицы и перезаписать state прямо перед редактированием другой книги.
+        await new Promise(resolve => setTimeout(resolve, 700));
         const coverInput = document.getElementById('newCoverFile');
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
           await uploadCover(id, coverInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
         }
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
           toast('⏳ Загружаю EPUB…');
           await uploadEpub(id, fileInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
           toast('✅ Книга и EPUB сохранены');
         } else {
           toast('✅ Книга сохранена в Google Таблицу');
         }
+        // Не перезаписываем state сразу данными bootstrap: Google Sheets/App Script
+        // может вернуть старую версию таблицы и удалить только что добавленные книги из интерфейса.
+        persistLocal();
         adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
@@ -3494,10 +3437,8 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-                const removed = await refreshFromSheetsAfterWrite(
-          () => !state.books.some(b => getAdminBookId(b) === id)
-        );
-        // Ответ API уже подтвердил удаление.
+        state.books = state.books.filter(b => getAdminBookId(b) !== id);
+        persistLocal();
         toast('🗑️ Книга удалена из Google Таблицы');
         adminTab('books');
         render();
@@ -3505,7 +3446,10 @@
     }
     function findAdminBook(id) {
       const wanted = normalizeAdminId(id);
-      return state.books.find(b => getAdminBookId(b) === wanted);
+      return state.books.find(b => {
+        const current = normalizeAdminId(getAdminBookId(b));
+        return current === wanted;
+      }) || null;
     }
 
     function editBook(id) {
@@ -3541,7 +3485,7 @@
           <textarea id="editDescription" class="admin-input" rows="3"
                     placeholder="Аннотация">${h(book.description)}</textarea>
           <input type="text" id="editCover" class="admin-input"
-                 value="${h(book.cover_emoji)}" placeholder="Резервный символ (необязательно)">
+                 value="${h(book.cover_emoji)}" placeholder="Обложка (эмодзи)">
           <input type="text" id="editCoverUrl" class="admin-input"
                  value="${h(book.cover_url || "")}" placeholder="Прямая ссылка на обложку">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Заменить файл обложки</label>
@@ -3592,7 +3536,10 @@
           button.textContent = '⏳ Сохраняю...';
         }
 
+        // Берём ПОЛНЫЙ объект существующей книги и меняем только поля формы.
+        // Это не даёт обновлению стереть данные, которых нет на текущей форме.
         const data = {
+          ...book,
           id,
           title: document.getElementById('editTitle')?.value?.trim() || 'Без названия',
           author: document.getElementById('editAuthor')?.value?.trim() || 'Неизвестный автор',
@@ -3640,12 +3587,13 @@
           await uploadEpub(id, fileInput);
         }
 
+        // Не делаем bootstrap сразу после POST: он мог вернуть старый снимок
+        // и из-за этого книги исчезали из state.
+        persistLocal();
+
         toast('✅ Изменения сохранены');
         adminTab('books');
         render();
-
-        // Обновление с Google Таблицы — только в фоне.
-        refreshFromSheetsAfterWrite().catch(() => {});
 
       } catch (e) {
         console.error('saveEditBook error:', e);
@@ -3814,14 +3762,14 @@
         `<div class="admin-item">
           <div>
             <div class="admin-item-title">
-              ${i + 1}. ${h(t.track_name || "Без названия")}
+              ${i + 1}. ${h(t.title || t.track_name || "Без названия")}
             </div>
             <div class="admin-item-sub">
               ${h(t.artist || "—")}
             </div>
           </div>
           <button class="admin-btn danger"
-                  onclick="removeTrackFromPlaylist('${t.id}')">
+                  data-delete-track="${h(String(t.id))}" onclick="return false;">
             🗑️
           </button>
         </div>`
@@ -3839,13 +3787,14 @@
           if(f.size>20*1024*1024) throw new Error('Аудиофайл слишком большой. Максимум 20 МБ.');
           const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(f);});
           toast('⏳ Загружаю музыку в Google Drive…');
+          const trackId='track_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
           await apiPost({action:'upload_audio',book_id:bookId,title:trackName,artist:artist,file_name:f.name,mime_type:f.type||'audio/mpeg',file_base64:base64});
-          await refreshFromSheetsAfterWrite();
+          await refreshFromSheetsAfterWrite(()=>state.playlists.some(t=>normalizeAdminId(t.id)===trackId),6);
         } else {
           if(!url) throw new Error('Выберите аудиофайл или укажите ссылку');
-          const newTrack={book_id:bookId,track_name:trackName,artist:artist,file_url:url,mood:''};
+          const newTrack={id:'track_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),book_id:bookId,track_name:trackName,artist:artist,file_url:url,mood:''};
           await apiPost({action:'add_playlist',playlist:newTrack});
-          await refreshFromSheetsAfterWrite();
+          await refreshFromSheetsAfterWrite(()=>state.playlists.some(t=>normalizeAdminId(t.id)===newTrack.id),6);
         }
         toast('✅ Трек и файл сохранены'); renderPlaylistTracks(bookId);
       } catch(e){toast('❌ '+(e.message||'Ошибка сохранения трека'));}
@@ -3893,7 +3842,7 @@
       `;
     }
     async function saveAnnounce() {
-      const data={id:normalizeAdminId(state.announcements[0]?.id||'1'),title:document.getElementById('annTitle').value||'Скоро',author:document.getElementById('annAuthor').value||'',teaser:document.getElementById('annTeaser').value||'Новая книга скоро появится.',release_date:document.getElementById('annDate').value||'',active:'TRUE',cover_emoji:'🌙'};
+      const data={id:normalizeAdminId(state.announcements[0]?.id||''),title:document.getElementById('annTitle').value||'Скоро',author:document.getElementById('annAuthor').value||'',teaser:document.getElementById('annTeaser').value||'Новая книга скоро появится.',release_date:document.getElementById('annDate').value||'',active:'TRUE',cover_emoji:'🌙'};
       try {
         await apiPost({action:'save_announcement',announcement:data});
         const saved = await refreshFromSheetsAfterWrite(
@@ -3930,6 +3879,13 @@
       });
       container.innerHTML = html;
     }
+    // Делегирование кликов: работает и после повторной отрисовки списка треков.
+    document.addEventListener('click', function(event) {
+      const button = event.target.closest('[data-delete-track]');
+      if (!button) return;
+      removeTrackFromPlaylist(button.dataset.deleteTrack);
+    });
+
     // Явно экспортируем функции админ-панели в window.
     // Это важно для Telegram WebView и inline onclick.
     window.editBook = editBook;
@@ -3940,6 +3896,14 @@
     window.showAddBookForm = showAddBookForm;
     window.adminTab = adminTab;
     window.findAdminBook = findAdminBook;
+    window.addTrackToPlaylist = addTrackToPlaylist;
+    window.removeTrackFromPlaylist = removeTrackFromPlaylist;
+    window.saveAnnounce = saveAnnounce;
+    window.closeAdminPanel = closeAdminPanel;
   </script>
+<script>
+  // Финальная синхронизация Telegram BackButton после любых изменений интерфейса.
+  document.addEventListener('click', function(){ setTimeout(updateTelegramBackButton, 0); });
+</script>
 </body>
 </html>
