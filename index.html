@@ -1683,21 +1683,52 @@
         </span>
       </div>`;
     }
+    function audioUrlCandidates(rawUrl) {
+      const url = String(rawUrl || "").trim();
+      if (!url) return [];
+
+      // Обычная прямая ссылка — оставляем как есть.
+      const candidates = [url];
+
+      // Для Google Drive добавляем несколько официальных вариантов.
+      // Разные WebView (iOS/Android/Telegram) иногда по-разному
+      // обрабатывают редиректы, поэтому плеер сможет попробовать запасной.
+      let id = "";
+      const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i);
+      if (m) id = m[1];
+
+      if (!id) {
+        try {
+          const u = new URL(url);
+          if (/drive\.google\.com/i.test(u.hostname)) {
+            id = u.searchParams.get("id") || "";
+          }
+        } catch (e) {}
+      }
+
+      if (id) {
+        candidates.push(
+          "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
+          "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t"
+        );
+      }
+
+      return [...new Set(candidates)];
+    }
+
     function tracksFor(bookId) {
       return state.playlists
-        .filter(x =>
-          String(x.book_id ?? x.bookId) ===
-          String(bookId)
-        )
-        .map(x => ({
-          name: String(
-            x.track_name ??
-            x.name ??
-            "Без названия"
-          ),
-          artist: String(x.artist ?? "—"),
-          url: String(x.file_url ?? x.url ?? "")
-        }));
+        .filter(x => String(x.book_id ?? x.bookId) === String(bookId))
+        .map(x => {
+          const rawUrl = x.file_url ?? x.url ?? x.audio_url ?? x.fileUrl ?? "";
+          const urls = audioUrlCandidates(rawUrl);
+          return {
+            name: String(x.track_name ?? x.name ?? "Без названия"),
+            artist: String(x.artist ?? "—"),
+            url: urls[0] || "",
+            urls
+          };
+        });
     }
     function fileFor(bookId) {
       return state.files.find(
@@ -2819,33 +2850,90 @@
     // АУДИО ПЛЕЕР
     // =========================
     function playTracks(tracks, index = 0) {
-      if (!tracks.length) {
-        return;
-      }
+      if (!tracks.length) return;
+
       state.player.tracks = tracks;
       state.player.index = index;
+
       if (state.player.audio) {
-        state.player.audio.pause();
-        state.player.audio = null;
+        try {
+          state.player.audio.pause();
+          state.player.audio.removeAttribute("src");
+          state.player.audio.load();
+        } catch (e) {}
       }
+
       const track = tracks[index];
-      if (!track.url) {
-        toast("У этого трека нет аудиофайла");
+      const urls = Array.isArray(track.urls) && track.urls.length
+        ? track.urls
+        : (track.url ? [track.url] : []);
+
+      if (!urls.length) {
+        toast("❌ У этого трека нет ссылки на аудиофайл");
+        state.player.playing = false;
         updatePlayer();
         return;
       }
-      const a = new Audio(track.url);
+
+      const a = document.createElement("audio");
       a.preload = "metadata";
-      a.loop = false;
+      a.playsInline = true;
+      a.setAttribute("playsinline", "");
+      a.setAttribute("webkit-playsinline", "");
+
+      let urlIndex = 0;
+      let switched = false;
+
+      const setSource = (url) => {
+        a.src = url;
+        a.load();
+      };
+
       a.addEventListener("ended", () => nextTrack());
       a.addEventListener("timeupdate", updatePlayer);
       a.addEventListener("loadedmetadata", updatePlayer);
-      state.player.audio = a;
-      state.player.playing = true;
-      a.play().catch(() => {
-        state.player.playing = false;
-        toast("Нажмите ▶ для запуска аудио");
+      a.addEventListener("playing", () => {
+        state.player.playing = true;
+        updatePlayer();
       });
+      a.addEventListener("pause", () => {
+        if (!a.ended) {
+          state.player.playing = false;
+          updatePlayer();
+        }
+      });
+
+      a.addEventListener("error", () => {
+        // Автоматически пробуем запасной URL один раз за другим.
+        if (urlIndex + 1 < urls.length && !switched) {
+          switched = true;
+          urlIndex += 1;
+          setSource(urls[urlIndex]);
+          const p = a.play();
+          if (p) p.catch(() => {});
+          return;
+        }
+
+        state.player.playing = false;
+        updatePlayer();
+        toast("❌ Не удалось воспроизвести аудио. Проверь ссылку и формат файла.");
+      });
+
+      state.player.audio = a;
+      state.player.playing = false;
+      setSource(urls[urlIndex]);
+
+      // Запуск происходит непосредственно после действия пользователя.
+      // Это работает и в iOS, и в Android WebView.
+      const p = a.play();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {
+          state.player.playing = false;
+          updatePlayer();
+          // Ошибка также будет обработана событием error, если источник недоступен.
+        });
+      }
+
       updatePlayer();
     }
     function nextTrack() {
