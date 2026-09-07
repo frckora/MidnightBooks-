@@ -1200,14 +1200,14 @@
     const API_URL =
       "https://script.google.com/macros/s/AKfycbw3B6zYIjkYY96OiNMyXoo4YlEh-I4FJMzhAkM1vaBvZWihMM80SDgLcHGKT1wDzpyixg/exec";
     const SHEETS = {
-      books: API_URL + "?action=bootstrap",
-      playlists: API_URL + "?action=bootstrap",
-      files: API_URL + "?action=bootstrap",
-      covers: API_URL + "?action=bootstrap",
-      announcements: API_URL + "?action=bootstrap"
+      books: API_URL + "?action=getBootstrap",
+      playlists: API_URL + "?action=getBootstrap",
+      files: API_URL + "?action=getBootstrap",
+      covers: API_URL + "?action=getBootstrap",
+      announcements: API_URL + "?action=getBootstrap"
     };
     const STATS_API = API_URL;
-    const CACHE_KEY = "midnightbooks_cache_v_new_4_apps_script";
+    const CACHE_KEY = "midnightbooks_cache_final_7_fixed";
     const ADMIN_PASSWORD = "midnight2026";
 
     const state = {
@@ -1513,9 +1513,7 @@
         series: String(raw.series ?? ""),
         series_order: String(seriesOrder),
         series_number: String(raw.series_number ?? seriesOrder),
-        trops: typeof raw.trops === "string"
-                ? raw.trops.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
-                : (Array.isArray(raw.trops) ? raw.trops : []),
+        trops: Array.isArray(raw.tropes) ? raw.tropes : (typeof raw.tropes === "string" ? raw.tropes.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean) : (typeof raw.trops === "string" ? raw.trops.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean) : (Array.isArray(raw.trops) ? raw.trops : []))),
         triggers: typeof raw.triggers === "string"
                   ? raw.triggers.split(/[|,;]\s*/).map(t => t.trim()).filter(Boolean)
                   : (Array.isArray(raw.triggers) ? raw.triggers : []),
@@ -1577,6 +1575,7 @@
         return "";
       }
       const preferred = [
+        row.file_url,
         row.cover_url,
         row.coverUrl,
         row.cover,
@@ -1622,7 +1621,7 @@
     function applyData(data) {
       state.books = unwrap(data.books || [])
         .map(normalizeBook);
-      state.playlists = unwrap(data.playlists || []);
+      state.playlists = unwrap(data.music || data.playlists || []);
       state.files = unwrap(data.files || []);
       state.covers = unwrap(data.covers || []);
       state.announcements = unwrap(data.announcements || []);
@@ -3404,7 +3403,7 @@
           <textarea id="newDescription" class="admin-input" rows="3"
                     placeholder="Аннотация"></textarea>
           <input type="text" id="newCover" class="admin-input"
-                 placeholder="Обложка (эмодзи)">
+                 placeholder="Резервный символ (необязательно)">
           <input type="text" id="newCoverUrl" class="admin-input"
                  placeholder="Прямая ссылка на обложку (необязательно)">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Файл обложки</label>
@@ -3539,7 +3538,7 @@
           <textarea id="editDescription" class="admin-input" rows="3"
                     placeholder="Аннотация">${h(book.description)}</textarea>
           <input type="text" id="editCover" class="admin-input"
-                 value="${h(book.cover_emoji)}" placeholder="Обложка (эмодзи)">
+                 value="${h(book.cover_emoji)}" placeholder="Резервный символ (необязательно)">
           <input type="text" id="editCoverUrl" class="admin-input"
                  value="${h(book.cover_url || "")}" placeholder="Прямая ссылка на обложку">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">🖼️ Заменить файл обложки</label>
