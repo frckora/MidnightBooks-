@@ -3417,8 +3417,8 @@
                  value="${h(book.release_date || "")}">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
           <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
-          <button type="button" class="btn primary" onclick="window.saveEditBook(${JSON.stringify(String(id))})"
-                  style="width:100%;margin-top:8px;">
+          <button type="button" class="btn primary" id="saveEditBookBtn"
+                  data-book-id="${h(String(id))}" style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
           <button class="btn" onclick="adminTab('books')"
@@ -3427,6 +3427,15 @@
           </button>
         </div>
       `;
+
+      const saveBtn = document.getElementById('saveEditBookBtn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          saveEditBook(this.dataset.bookId);
+        });
+      }
     }
     async function saveEditBook(id) {
       id = normalizeAdminId(id);
@@ -3464,9 +3473,10 @@
         };
 
         // Сначала сразу меняем книгу в приложении.
+        // Сохраняем локально, но не перерисовываем экран до завершения запроса.
+        // Иначе Telegram WebView удаляет форму и обработчик кнопки прямо во время сохранения.
         Object.assign(book, data);
         persistLocal();
-        render();
 
         // Отправляем изменения. Не используем повторную проверку,
         // которая раньше зависала на этом месте.
