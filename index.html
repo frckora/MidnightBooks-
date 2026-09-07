@@ -3338,15 +3338,13 @@
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
           await uploadCover(id, coverInput);
-          await refreshFromSheetsAfterWrite(() => state.books.some(b => getAdminBookId(b) === id && !!b.cover_url));
+          refreshFromSheetsAfterWrite().catch(() => {});
         }
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
           toast('⏳ Загружаю EPUB…');
           await uploadEpub(id, fileInput);
-          await refreshFromSheetsAfterWrite(
-            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
-          );
+          refreshFromSheetsAfterWrite().catch(() => {});
           toast('✅ Книга и EPUB сохранены');
         } else {
           toast('✅ Книга сохранена в Google Таблицу');
@@ -3447,30 +3445,26 @@
           series_order:document.getElementById('editSeriesOrder')?.value||'',
           release_date:document.getElementById('editReleaseDate')?.value||''
         };
-        await apiPost({action:'update_book', book:data});
-                const saved = await refreshFromSheetsAfterWrite(
-          () => {
-            const current = state.books.find(b => getAdminBookId(b) === id);
-            return !!current &&
-              current.title === data.title &&
-              current.author === data.author &&
-              current.description === data.description;
-          }
-        );
-        if (!saved) throw new Error('Google Таблица не подтвердила изменение книги');
+        const result = await apiPost({action:'update_book', book:data});
+        if (result && result.ok === false) throw new Error(result.error || 'Сервер не сохранил изменения');
+
+        // Apps Script уже подтвердил запись — обновляем интерфейс сразу,
+        // не ждём бесконечной повторной проверки bootstrap.
+        Object.assign(book, data);
+        persistLocal();
+        refreshFromSheetsAfterWrite().catch(() => {});
+        toast('⏳ Сохраняю дополнительные изменения…');
         const coverInput=document.getElementById('editCoverFile');
         if(coverInput?.files?.length){
           toast('⏳ Загружаю новую обложку…');
           await uploadCover(id,coverInput);
-          await refreshFromSheetsAfterWrite(() => state.books.some(b => getAdminBookId(b) === id && !!b.cover_url));
+          refreshFromSheetsAfterWrite().catch(() => {});
         }
         const fileInput=document.getElementById('editEpub');
         if(fileInput?.files?.length){
           toast('⏳ Загружаю новый EPUB…');
           await uploadEpub(id,fileInput);
-          await refreshFromSheetsAfterWrite(
-            () => state.files.some(f => String(f.book_id ?? f.bookId) === id)
-          );
+          refreshFromSheetsAfterWrite().catch(() => {});
         }
         toast('✅ Изменения сохранены в Google Таблицу'); adminTab('books'); render();
       } catch(e){ toast('❌ '+(e.message||'Не удалось сохранить')); }
