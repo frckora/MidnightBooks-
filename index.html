@@ -3417,7 +3417,7 @@
                  value="${h(book.release_date || "")}">
           <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;">📁 Заменить EPUB (необязательно)</label>
           <input type="file" id="editEpub" class="admin-input" accept=".epub,application/epub+zip">
-          <button class="btn primary" onclick="window.saveEditBook(${JSON.stringify(String(id))})"
+          <button type="button" class="btn primary" onclick="window.saveEditBook(${JSON.stringify(String(id))})"
                   style="width:100%;margin-top:8px;">
             💾 Сохранить изменения
           </button>
@@ -3430,45 +3430,87 @@
     }
     async function saveEditBook(id) {
       id = normalizeAdminId(id);
-      const book = state.books.find(b=>normalizeAdminId(b.id)===id);
-      if (!book) { toast('❌ Книга не найдена'); return; }
-      try {
-        const data = {
-          id:id, title:document.getElementById('editTitle').value||'Без названия',
-          author:document.getElementById('editAuthor').value||'Неизвестный автор',
-          trops:document.getElementById('editTrops').value.split(',').map(t=>t.trim()).filter(Boolean),
-          triggers:document.getElementById('editTriggers').value.split(',').map(t=>t.trim()).filter(Boolean),
-          description:document.getElementById('editDescription').value||'Описание пока не добавлено.',
-          cover_emoji:document.getElementById('editCover').value||'📖',
-          cover_url:document.getElementById('editCoverUrl')?.value||'',
-          series:document.getElementById('editSeries').value||null,
-          series_order:document.getElementById('editSeriesOrder')?.value||'',
-          release_date:document.getElementById('editReleaseDate')?.value||''
-        };
-        const result = await apiPost({action:'update_book', book:data});
-        if (result && result.ok === false) throw new Error(result.error || 'Сервер не сохранил изменения');
+      const book = findAdminBook(id) || state.books.find(b => normalizeAdminId(b.id) === id);
 
-        // Apps Script уже подтвердил запись — обновляем интерфейс сразу,
-        // не ждём бесконечной повторной проверки bootstrap.
+      if (!book) {
+        toast('❌ Книга не найдена');
+        return;
+      }
+
+      const button = [...document.querySelectorAll('button')]
+        .find(btn => btn.textContent.includes('Сохранить изменения'));
+
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = '⏳ Сохраняю...';
+        }
+
+        const data = {
+          id,
+          title: document.getElementById('editTitle')?.value?.trim() || 'Без названия',
+          author: document.getElementById('editAuthor')?.value?.trim() || 'Неизвестный автор',
+          trops: (document.getElementById('editTrops')?.value || '').split(',').map(t => t.trim()).filter(Boolean),
+          triggers: (document.getElementById('editTriggers')?.value || '').split(',').map(t => t.trim()).filter(Boolean),
+          description: document.getElementById('editDescription')?.value || 'Описание пока не добавлено.',
+          cover_emoji: document.getElementById('editCover')?.value || '📖',
+          cover_url: document.getElementById('editCoverUrl')?.value || book.cover_url || '',
+          series: document.getElementById('editSeries')?.value || null,
+          series_order: document.getElementById('editSeriesOrder')?.value || '',
+          release_date: document.getElementById('editReleaseDate')?.value || '',
+          status: book.status || 'published',
+          quotes: Array.isArray(book.quotes) ? book.quotes : arr(book.quotes),
+          rating: book.rating || 0
+        };
+
+        // Сначала сразу меняем книгу в приложении.
         Object.assign(book, data);
         persistLocal();
+        render();
+
+        // Отправляем изменения. Не используем повторную проверку,
+        // которая раньше зависала на этом месте.
+        const result = await Promise.race([
+          apiPost({ action: 'update_book', book: data }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Сервер слишком долго отвечает')), 15000)
+          )
+        ]);
+
+        if (result && result.ok === false) {
+          throw new Error(result.error || 'Не удалось сохранить изменения');
+        }
+
+        const coverInput = document.getElementById('editCoverFile');
+        if (coverInput?.files?.length) {
+          toast('⏳ Загружаю новую обложку...');
+          await uploadCover(id, coverInput);
+        }
+
+        const fileInput = document.getElementById('editEpub');
+        if (fileInput?.files?.length) {
+          toast('⏳ Загружаю новый EPUB...');
+          await uploadEpub(id, fileInput);
+        }
+
+        toast('✅ Изменения сохранены');
+        adminTab('books');
+        render();
+
+        // Обновление с Google Таблицы — только в фоне.
         refreshFromSheetsAfterWrite().catch(() => {});
-        toast('⏳ Сохраняю дополнительные изменения…');
-        const coverInput=document.getElementById('editCoverFile');
-        if(coverInput?.files?.length){
-          toast('⏳ Загружаю новую обложку…');
-          await uploadCover(id,coverInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
+
+      } catch (e) {
+        console.error('saveEditBook error:', e);
+        toast('❌ ' + (e.message || 'Не удалось сохранить изменения'));
+
+        if (button) {
+          button.disabled = false;
+          button.textContent = '💾 Сохранить изменения';
         }
-        const fileInput=document.getElementById('editEpub');
-        if(fileInput?.files?.length){
-          toast('⏳ Загружаю новый EPUB…');
-          await uploadEpub(id,fileInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
-        }
-        toast('✅ Изменения сохранены в Google Таблицу'); adminTab('books'); render();
-      } catch(e){ toast('❌ '+(e.message||'Не удалось сохранить')); }
+      }
     }
+
     // ---- ЦИТАТЫ ----
     function editQuotes(id) {
       id=normalizeAdminId(id);
