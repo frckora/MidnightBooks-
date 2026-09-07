@@ -1620,8 +1620,26 @@
       }));
     }
     function applyData(data) {
+      const seenBookIds = new Set();
+
+      // Не даём пустым или случайным строкам таблицы превращаться
+      // в «Без названия» и появляться как новые книги.
       state.books = unwrap(data.books || [])
-        .map(normalizeBook);
+        .filter(raw => {
+          if (!raw || typeof raw !== 'object') return false;
+          const id = String(raw.id ?? raw.book_id ?? raw.bookId ?? '').trim();
+          const title = String(raw.title ?? raw.name ?? '').trim();
+          const author = String(raw.author ?? '').trim();
+          return !!id && (!!title || !!author);
+        })
+        .map(normalizeBook)
+        .filter(book => {
+          const id = String(book.id || '').trim();
+          if (!id || seenBookIds.has(id)) return false;
+          seenBookIds.add(id);
+          return true;
+        });
+
       state.playlists = unwrap(data.playlists || []);
       state.files = unwrap(data.files || []);
       state.covers = unwrap(data.covers || []);
@@ -3438,22 +3456,24 @@
         }
         persistLocal();
         toast('⏳ Загружаю дополнительные файлы…');
-        refreshFromSheetsAfterWrite();
+        // Не запускаем параллельный refresh: он мог вернуть старый снимок
+        // таблицы и перезаписать state прямо перед редактированием другой книги.
+        await new Promise(resolve => setTimeout(resolve, 700));
         const coverInput = document.getElementById('newCoverFile');
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
           await uploadCover(id, coverInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
         }
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
           toast('⏳ Загружаю EPUB…');
           await uploadEpub(id, fileInput);
-          refreshFromSheetsAfterWrite().catch(() => {});
           toast('✅ Книга и EPUB сохранены');
         } else {
           toast('✅ Книга сохранена в Google Таблицу');
         }
+        // Один контролируемый refresh только после завершения ВСЕХ записей.
+        try { await refreshFromSheetsAfterWrite(); } catch (e) { console.warn(e); }
         adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
@@ -3560,7 +3580,10 @@
           button.textContent = '⏳ Сохраняю...';
         }
 
+        // Берём ПОЛНЫЙ объект существующей книги и меняем только поля формы.
+        // Это не даёт обновлению стереть данные, которых нет на текущей форме.
         const data = {
+          ...book,
           id,
           title: document.getElementById('editTitle')?.value?.trim() || 'Без названия',
           author: document.getElementById('editAuthor')?.value?.trim() || 'Неизвестный автор',
@@ -3608,12 +3631,17 @@
           await uploadEpub(id, fileInput);
         }
 
+        // После всех операций ждём один последовательный refresh.
+        await new Promise(resolve => setTimeout(resolve, 700));
+        try {
+          await refreshFromSheetsAfterWrite();
+        } catch (e) {
+          console.warn('Не удалось обновить данные после редактирования:', e);
+        }
+
         toast('✅ Изменения сохранены');
         adminTab('books');
         render();
-
-        // Обновление с Google Таблицы — только в фоне.
-        refreshFromSheetsAfterWrite().catch(() => {});
 
       } catch (e) {
         console.error('saveEditBook error:', e);
