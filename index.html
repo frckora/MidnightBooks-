@@ -1198,7 +1198,7 @@
   <script>
     "use strict";
     const API_URL =
-      "https://script.google.com/macros/s/AKfycbzIMKHi1tRVXJ8a1YZoxvgNv5lsUiJeC4-FtCTGcAqAAKpSatPM7f36mvf95pNHrWcB/exec";
+      "https://script.google.com/macros/s/AKfycbxY9cfR0PI6diXJ4udNstIGzgSZXJkqksN63CslVrGvn7vajScIULloHK8WtadiYwhEEg/exec";
     const SHEETS = {
       books: API_URL + "?action=bootstrap",
       playlists: API_URL + "?action=bootstrap",
@@ -1207,7 +1207,7 @@
       announcements: API_URL + "?action=bootstrap"
     };
     const STATS_API = API_URL;
-    const CACHE_KEY = "midnightbooks_cache_v4_apps_script";
+    const CACHE_KEY = "midnightbooks_cache_v_new_4_apps_script";
     const ADMIN_PASSWORD = "midnight2026";
 
     const state = {
@@ -1620,26 +1620,8 @@
       }));
     }
     function applyData(data) {
-      const seenBookIds = new Set();
-
-      // Не даём пустым или случайным строкам таблицы превращаться
-      // в «Без названия» и появляться как новые книги.
       state.books = unwrap(data.books || [])
-        .filter(raw => {
-          if (!raw || typeof raw !== 'object') return false;
-          const id = String(raw.id ?? raw.book_id ?? raw.bookId ?? '').trim();
-          const title = String(raw.title ?? raw.name ?? '').trim();
-          const author = String(raw.author ?? '').trim();
-          return !!id && (!!title || !!author);
-        })
-        .map(normalizeBook)
-        .filter(book => {
-          const id = String(book.id || '').trim();
-          if (!id || seenBookIds.has(id)) return false;
-          seenBookIds.add(id);
-          return true;
-        });
-
+        .map(normalizeBook);
       state.playlists = unwrap(data.playlists || []);
       state.files = unwrap(data.files || []);
       state.covers = unwrap(data.covers || []);
@@ -1715,32 +1697,33 @@
       const url = String(rawUrl || "").trim();
       if (!url) return [];
 
-      let id = "";
+      // Обычная прямая ссылка — оставляем как есть.
+      const candidates = [url];
 
+      // Для Google Drive добавляем несколько официальных вариантов.
+      // Разные WebView (iOS/Android/Telegram) иногда по-разному
+      // обрабатывают редиректы, поэтому плеер сможет попробовать запасной.
+      let id = "";
       const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i);
       if (m) id = m[1];
 
       if (!id) {
         try {
           const u = new URL(url);
-          if (/drive\.google\.com|driveusercontent\.google\.com/i.test(u.hostname)) {
+          if (/drive\.google\.com/i.test(u.hostname)) {
             id = u.searchParams.get("id") || "";
           }
         } catch (e) {}
       }
 
-      // Если это не Google Drive — используем ссылку как есть.
-      if (!id) return [url];
+      if (id) {
+        candidates.push(
+          "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
+          "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t"
+        );
+      }
 
-      // Для Google Drive пробуем ВСЕ варианты. Telegram WebView на iPhone
-      // и Android по-разному обрабатывает редиректы Drive.
-      return [...new Set([
-        "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
-        "https://drive.google.com/uc?id=" + encodeURIComponent(id) + "&export=download",
-        "https://drive.google.com/uc?export=open&id=" + encodeURIComponent(id),
-        "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t",
-        url
-      ])];
+      return [...new Set(candidates)];
     }
 
     function tracksFor(bookId) {
@@ -2892,7 +2875,7 @@
 
       const track = tracks[index];
       const urls = Array.isArray(track.urls) && track.urls.length
-        ? track.urls.filter(Boolean)
+        ? track.urls
         : (track.url ? [track.url] : []);
 
       if (!urls.length) {
@@ -2903,54 +2886,23 @@
       }
 
       const a = document.createElement("audio");
-      a.preload = "auto";
+      a.preload = "metadata";
       a.playsInline = true;
       a.setAttribute("playsinline", "");
       a.setAttribute("webkit-playsinline", "");
 
       let urlIndex = 0;
-      let finished = false;
+      let switched = false;
 
-      const trySource = (indexToTry) => {
-        if (indexToTry >= urls.length) {
-          if (!finished) {
-            finished = true;
-            state.player.playing = false;
-            updatePlayer();
-            toast("❌ Не удалось открыть аудиофайл. Проблема в ссылке Google Drive, а не в MP3.");
-          }
-          return;
-        }
-
-        urlIndex = indexToTry;
-
-        try {
-          a.pause();
-          a.removeAttribute("src");
-          a.load();
-          a.src = urls[urlIndex];
-          a.load();
-
-          const promise = a.play();
-          if (promise && typeof promise.catch === "function") {
-            promise.catch(() => {
-              // Событие error обычно сработает само. Если WebView его не даёт —
-              // пробуем следующий вариант ссылки.
-              setTimeout(() => {
-                if (!finished && a.error) trySource(urlIndex + 1);
-              }, 700);
-            });
-          }
-        } catch (e) {
-          trySource(urlIndex + 1);
-        }
+      const setSource = (url) => {
+        a.src = url;
+        a.load();
       };
 
       a.addEventListener("ended", () => nextTrack());
       a.addEventListener("timeupdate", updatePlayer);
       a.addEventListener("loadedmetadata", updatePlayer);
       a.addEventListener("playing", () => {
-        finished = false;
         state.player.playing = true;
         updatePlayer();
       });
@@ -2962,15 +2914,38 @@
       });
 
       a.addEventListener("error", () => {
-        if (!finished) trySource(urlIndex + 1);
+        // Автоматически пробуем запасной URL один раз за другим.
+        if (urlIndex + 1 < urls.length && !switched) {
+          switched = true;
+          urlIndex += 1;
+          setSource(urls[urlIndex]);
+          const p = a.play();
+          if (p) p.catch(() => {});
+          return;
+        }
+
+        state.player.playing = false;
+        updatePlayer();
+        toast("❌ Не удалось воспроизвести аудио. Проверь ссылку и формат файла.");
       });
 
       state.player.audio = a;
       state.player.playing = false;
-      trySource(0);
+      setSource(urls[urlIndex]);
+
+      // Запуск происходит непосредственно после действия пользователя.
+      // Это работает и в iOS, и в Android WebView.
+      const p = a.play();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {
+          state.player.playing = false;
+          updatePlayer();
+          // Ошибка также будет обработана событием error, если источник недоступен.
+        });
+      }
+
       updatePlayer();
     }
-
     function nextTrack() {
       const p = state.player;
       if (!p.tracks.length) {
@@ -3184,52 +3159,77 @@
       return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(String(STATS_API || '').trim());
     }
     async function apiPost(payload) {
-      if (!apiReady()) throw new Error("Не настроен URL Apps Script");
+      if (!apiReady()) {
+        throw new Error("Не настроен URL Apps Script");
+      }
 
-      // Не используем no-cors fetch: он подтверждает отправку раньше,
-      // чем Apps Script реально записывает данные.
-      return await new Promise((resolve, reject) => {
-        const iframeName = "mbApiFrame_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        const iframe = document.createElement("iframe");
-        iframe.name = iframeName;
-        iframe.style.display = "none";
-        document.body.appendChild(iframe);
+      const body = "data=" + encodeURIComponent(JSON.stringify(payload));
 
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = STATS_API;
-        form.target = iframeName;
-        form.enctype = "application/x-www-form-urlencoded";
-        form.style.display = "none";
+      // Apps Script Web App не даёт браузеру прочитать обычный POST-ответ
+      // из-за CORS. Поэтому запись отправляется no-cors, а результат
+      // подтверждается отдельным JSONP GET через refreshFromSheetsAfterWrite().
+      try {
+        await fetch(STATS_API, {
+          method: "POST",
+          mode: "no-cors",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+          },
+          body
+        });
+        return { ok: true, submitted: true };
+      } catch (fetchError) {
+        // Надёжный запасной способ для Telegram WebView.
+        return await new Promise((resolve, reject) => {
+          const iframeName =
+            "mbApiFrame_" + Date.now() + "_" +
+            Math.random().toString(36).slice(2);
 
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = "data";
-        input.value = JSON.stringify(payload);
-        form.appendChild(input);
-        document.body.appendChild(form);
+          const iframe = document.createElement("iframe");
+          iframe.name = iframeName;
+          iframe.style.display = "none";
+          document.body.appendChild(iframe);
 
-        let done = false;
-        const cleanup = () => {
-          try { form.remove(); } catch {}
-          try { iframe.remove(); } catch {}
-        };
-        const finish = () => {
-          if (done) return;
-          done = true;
-          setTimeout(cleanup, 1000);
-          resolve({ ok:true, submitted:true });
-        };
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = STATS_API;
+          form.target = iframeName;
+          form.enctype = "application/x-www-form-urlencoded";
+          form.style.display = "none";
 
-        try {
-          form.submit();
-          // На iPhone Telegram событие iframe load бывает нестабильным.
-          setTimeout(finish, 1800);
-        } catch (e) {
-          cleanup();
-          reject(e);
-        }
-      });
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "data";
+          input.value = JSON.stringify(payload);
+          form.appendChild(input);
+          document.body.appendChild(form);
+
+          let done = false;
+          const cleanup = () => {
+            try { form.remove(); } catch {}
+            try { iframe.remove(); } catch {}
+          };
+
+          const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            cleanup();
+            resolve({ ok: true, submitted: true });
+          }, 5000);
+
+          try {
+            form.submit();
+          } catch (e) {
+            clearTimeout(timer);
+            if (!done) {
+              done = true;
+              cleanup();
+              reject(e);
+            }
+          }
+        });
+      }
     }
 
     async function refreshFromSheetsAfterWrite(checkFn) {
@@ -3431,25 +3431,22 @@
         }
         persistLocal();
         toast('⏳ Загружаю дополнительные файлы…');
-        // Не запускаем параллельный refresh: он мог вернуть старый снимок
-        // таблицы и перезаписать state прямо перед редактированием другой книги.
-        await new Promise(resolve => setTimeout(resolve, 700));
+        refreshFromSheetsAfterWrite();
         const coverInput = document.getElementById('newCoverFile');
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
           await uploadCover(id, coverInput);
+          refreshFromSheetsAfterWrite().catch(() => {});
         }
         const fileInput = document.getElementById('newEpub');
         if (fileInput?.files?.length) {
           toast('⏳ Загружаю EPUB…');
           await uploadEpub(id, fileInput);
+          refreshFromSheetsAfterWrite().catch(() => {});
           toast('✅ Книга и EPUB сохранены');
         } else {
           toast('✅ Книга сохранена в Google Таблицу');
         }
-        // Не перезаписываем state сразу данными bootstrap: Google Sheets/App Script
-        // может вернуть старую версию таблицы и удалить только что добавленные книги из интерфейса.
-        persistLocal();
         adminTab('books'); render();
       } catch(e) { toast('❌ '+(e.message||'Не удалось сохранить книгу')); }
     }
@@ -3458,8 +3455,10 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-        state.books = state.books.filter(b => getAdminBookId(b) !== id);
-        persistLocal();
+                const removed = await refreshFromSheetsAfterWrite(
+          () => !state.books.some(b => getAdminBookId(b) === id)
+        );
+        // Ответ API уже подтвердил удаление.
         toast('🗑️ Книга удалена из Google Таблицы');
         adminTab('books');
         render();
@@ -3467,10 +3466,7 @@
     }
     function findAdminBook(id) {
       const wanted = normalizeAdminId(id);
-      return state.books.find(b => {
-        const current = normalizeAdminId(getAdminBookId(b));
-        return current === wanted;
-      }) || null;
+      return state.books.find(b => getAdminBookId(b) === wanted);
     }
 
     function editBook(id) {
@@ -3557,10 +3553,7 @@
           button.textContent = '⏳ Сохраняю...';
         }
 
-        // Берём ПОЛНЫЙ объект существующей книги и меняем только поля формы.
-        // Это не даёт обновлению стереть данные, которых нет на текущей форме.
         const data = {
-          ...book,
           id,
           title: document.getElementById('editTitle')?.value?.trim() || 'Без названия',
           author: document.getElementById('editAuthor')?.value?.trim() || 'Неизвестный автор',
@@ -3608,13 +3601,12 @@
           await uploadEpub(id, fileInput);
         }
 
-        // Не делаем bootstrap сразу после POST: он мог вернуть старый снимок
-        // и из-за этого книги исчезали из state.
-        persistLocal();
-
         toast('✅ Изменения сохранены');
         adminTab('books');
         render();
+
+        // Обновление с Google Таблицы — только в фоне.
+        refreshFromSheetsAfterWrite().catch(() => {});
 
       } catch (e) {
         console.error('saveEditBook error:', e);
