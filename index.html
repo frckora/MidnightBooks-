@@ -1697,33 +1697,32 @@
       const url = String(rawUrl || "").trim();
       if (!url) return [];
 
-      // Обычная прямая ссылка — оставляем как есть.
-      const candidates = [url];
-
-      // Для Google Drive добавляем несколько официальных вариантов.
-      // Разные WebView (iOS/Android/Telegram) иногда по-разному
-      // обрабатывают редиректы, поэтому плеер сможет попробовать запасной.
       let id = "";
+
       const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i);
       if (m) id = m[1];
 
       if (!id) {
         try {
           const u = new URL(url);
-          if (/drive\.google\.com/i.test(u.hostname)) {
+          if (/drive\.google\.com|driveusercontent\.google\.com/i.test(u.hostname)) {
             id = u.searchParams.get("id") || "";
           }
         } catch (e) {}
       }
 
-      if (id) {
-        candidates.push(
-          "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
-          "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t"
-        );
-      }
+      // Если это не Google Drive — используем ссылку как есть.
+      if (!id) return [url];
 
-      return [...new Set(candidates)];
+      // Для Google Drive пробуем ВСЕ варианты. Telegram WebView на iPhone
+      // и Android по-разному обрабатывает редиректы Drive.
+      return [...new Set([
+        "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id),
+        "https://drive.google.com/uc?id=" + encodeURIComponent(id) + "&export=download",
+        "https://drive.google.com/uc?export=open&id=" + encodeURIComponent(id),
+        "https://drive.usercontent.google.com/download?id=" + encodeURIComponent(id) + "&export=download&confirm=t",
+        url
+      ])];
     }
 
     function tracksFor(bookId) {
@@ -2875,7 +2874,7 @@
 
       const track = tracks[index];
       const urls = Array.isArray(track.urls) && track.urls.length
-        ? track.urls
+        ? track.urls.filter(Boolean)
         : (track.url ? [track.url] : []);
 
       if (!urls.length) {
@@ -2886,23 +2885,54 @@
       }
 
       const a = document.createElement("audio");
-      a.preload = "metadata";
+      a.preload = "auto";
       a.playsInline = true;
       a.setAttribute("playsinline", "");
       a.setAttribute("webkit-playsinline", "");
 
       let urlIndex = 0;
-      let switched = false;
+      let finished = false;
 
-      const setSource = (url) => {
-        a.src = url;
-        a.load();
+      const trySource = (indexToTry) => {
+        if (indexToTry >= urls.length) {
+          if (!finished) {
+            finished = true;
+            state.player.playing = false;
+            updatePlayer();
+            toast("❌ Не удалось открыть аудиофайл. Проблема в ссылке Google Drive, а не в MP3.");
+          }
+          return;
+        }
+
+        urlIndex = indexToTry;
+
+        try {
+          a.pause();
+          a.removeAttribute("src");
+          a.load();
+          a.src = urls[urlIndex];
+          a.load();
+
+          const promise = a.play();
+          if (promise && typeof promise.catch === "function") {
+            promise.catch(() => {
+              // Событие error обычно сработает само. Если WebView его не даёт —
+              // пробуем следующий вариант ссылки.
+              setTimeout(() => {
+                if (!finished && a.error) trySource(urlIndex + 1);
+              }, 700);
+            });
+          }
+        } catch (e) {
+          trySource(urlIndex + 1);
+        }
       };
 
       a.addEventListener("ended", () => nextTrack());
       a.addEventListener("timeupdate", updatePlayer);
       a.addEventListener("loadedmetadata", updatePlayer);
       a.addEventListener("playing", () => {
+        finished = false;
         state.player.playing = true;
         updatePlayer();
       });
@@ -2914,38 +2944,15 @@
       });
 
       a.addEventListener("error", () => {
-        // Автоматически пробуем запасной URL один раз за другим.
-        if (urlIndex + 1 < urls.length && !switched) {
-          switched = true;
-          urlIndex += 1;
-          setSource(urls[urlIndex]);
-          const p = a.play();
-          if (p) p.catch(() => {});
-          return;
-        }
-
-        state.player.playing = false;
-        updatePlayer();
-        toast("❌ Не удалось воспроизвести аудио. Проверь ссылку и формат файла.");
+        if (!finished) trySource(urlIndex + 1);
       });
 
       state.player.audio = a;
       state.player.playing = false;
-      setSource(urls[urlIndex]);
-
-      // Запуск происходит непосредственно после действия пользователя.
-      // Это работает и в iOS, и в Android WebView.
-      const p = a.play();
-      if (p && typeof p.catch === "function") {
-        p.catch(() => {
-          state.player.playing = false;
-          updatePlayer();
-          // Ошибка также будет обработана событием error, если источник недоступен.
-        });
-      }
-
+      trySource(0);
       updatePlayer();
     }
+
     function nextTrack() {
       const p = state.player;
       if (!p.tracks.length) {
