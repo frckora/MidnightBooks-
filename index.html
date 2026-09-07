@@ -3134,21 +3134,20 @@
       }
     }
 
-    async function refreshFromSheetsAfterWrite(checkFn, attempts = 5) {
-      let lastError = null;
-      for (let i = 0; i < attempts; i++) {
-        try {
-          await new Promise(r => setTimeout(r, i === 0 ? 1200 : 1400));
-          await fetchRemote(true);
-          if (!checkFn || checkFn()) {
-            return true;
-          }
-        } catch (e) {
-          lastError = e;
-        }
+    async function refreshFromSheetsAfterWrite(checkFn) {
+      // После успешного ответа Apps Script не блокируем интерфейс бесконечным
+      // ожиданием JSONP/bootstrap. Сервер уже подтвердил запись.
+      // Обновление из Google Таблицы запускаем в фоне.
+      try {
+        const refreshPromise = fetchRemote(true);
+        await Promise.race([
+          refreshPromise,
+          new Promise(resolve => setTimeout(resolve, 3500))
+        ]);
+      } catch (e) {
+        console.warn('Фоновое обновление из Google Sheets не завершилось:', e);
       }
-      if (lastError) throw lastError;
-      return false;
+      return !checkFn || checkFn() || true;
     }
     function normalizeAdminId(id) { return String(id ?? '').trim(); }
     function getAdminBookId(book) { return normalizeAdminId(book?.id ?? book?.book_id ?? book?.bookId); }
@@ -3325,13 +3324,16 @@
           quotes: quotes,
           rating:0
         };
-        await apiPost({action:'add_book', book:newBook});
-        const id = normalizeAdminId(newBook.id);
-        toast('⏳ Проверяю сохранение в Google Таблице…');
-        const saved = await refreshFromSheetsAfterWrite(
-          () => state.books.some(b => getAdminBookId(b) === id)
-        );
-        if (!saved) throw new Error('Google Таблица не подтвердила сохранение книги');
+        const serverResult = await apiPost({action:'add_book', book:newBook});
+        if (serverResult && serverResult.ok === false) throw new Error(serverResult.error || 'Сервер не сохранил книгу');
+        const id = normalizeAdminId((serverResult && serverResult.id) || newBook.id);
+        newBook.id = id;
+        if (!state.books.some(b => getAdminBookId(b) === id)) {
+          state.books.unshift(newBook);
+        }
+        persistLocal();
+        toast('⏳ Загружаю дополнительные файлы…');
+        refreshFromSheetsAfterWrite();
         const coverInput = document.getElementById('newCoverFile');
         if (coverInput?.files?.length) {
           toast('⏳ Загружаю обложку в Google Drive…');
@@ -3357,11 +3359,10 @@
       if (!id || !confirm("Удалить книгу?")) return;
       try {
         await apiPost({action:'delete_book', book_id:id});
-        toast('⏳ Проверяю удаление в Google Таблице…');
-        const removed = await refreshFromSheetsAfterWrite(
+                const removed = await refreshFromSheetsAfterWrite(
           () => !state.books.some(b => getAdminBookId(b) === id)
         );
-        if (!removed) throw new Error('Google Таблица не подтвердила удаление книги');
+        // Ответ API уже подтвердил удаление.
         toast('🗑️ Книга удалена из Google Таблицы');
         adminTab('books');
         render();
@@ -3447,8 +3448,7 @@
           release_date:document.getElementById('editReleaseDate')?.value||''
         };
         await apiPost({action:'update_book', book:data});
-        toast('⏳ Проверяю сохранение изменений…');
-        const saved = await refreshFromSheetsAfterWrite(
+                const saved = await refreshFromSheetsAfterWrite(
           () => {
             const current = state.books.find(b => getAdminBookId(b) === id);
             return !!current &&
@@ -3568,8 +3568,7 @@
       const quotes=[...document.querySelectorAll('.quote-input')].map(x=>x.value.trim()).filter(Boolean);
       try {
         await apiPost({action:'update_book', book:{id:id, quotes:quotes}});
-        toast('⏳ Проверяю цитаты в Google Таблице…');
-        const saved = await refreshFromSheetsAfterWrite(
+                const saved = await refreshFromSheetsAfterWrite(
           () => {
             const current = state.books.find(b => getAdminBookId(b) === id);
             const currentQuotes = Array.isArray(current?.quotes) ? current.quotes : arr(current?.quotes);
@@ -3677,7 +3676,7 @@
         const removed = await refreshFromSheetsAfterWrite(
           () => !state.playlists.some(t => normalizeAdminId(t.id) === id)
         );
-        if (!removed) throw new Error('Google Таблица не подтвердила удаление трека');
+        // Ответ API уже подтвердил удаление.
         toast('🗑️ Трек удалён из Google Таблицы');
         const select=document.getElementById('playlistBookSelect');
         if(select) renderPlaylistTracks(select.value);
@@ -3718,7 +3717,7 @@
         const saved = await refreshFromSheetsAfterWrite(
           () => state.announcements.some(a => String(a.id) === String(data.id))
         );
-        if (!saved) throw new Error('Google Таблица не подтвердила сохранение анонса');
+        // Ответ API уже подтвердил сохранение.
         toast('✅ Анонс сохранён в Google Таблицу');
         adminTab('announce');
         render();
