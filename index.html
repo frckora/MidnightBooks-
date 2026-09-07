@@ -1717,8 +1717,11 @@
       // Для обычных внешних прямых ссылок сначала используем исходный URL.
       if (raw && !id) candidates.push(raw);
 
-      // Для Google Drive не используем страницу просмотра как источник audio.
-      // Строим только URL, которые должны отдавать сам бинарный файл.
+      // Сначала используем прямую ссылку, которую возвращает backend.
+      // Новый Apps Script сохраняет uc?export=download&id=...
+      if (raw && !/drive\.google\.com\/file\/d\//i.test(raw)) candidates.push(raw);
+
+      // Затем добавляем запасные прямые ссылки Google Drive.
       if (id) {
         const safeId = encodeURIComponent(id);
         candidates.push(
@@ -1744,7 +1747,7 @@
           const urls = audioUrlCandidates(rawUrl, driveId);
           return {
             id: String(x.id ?? ""),
-            name: String(x.track_name ?? x.name ?? "Без названия"),
+            name: String(x.title ?? x.track_name ?? x.name ?? x.file_name ?? "Без названия"),
             artist: String(x.artist ?? "—"),
             url: urls[0] || "",
             urls
@@ -3836,7 +3839,7 @@
           if(f.size>20*1024*1024) throw new Error('Аудиофайл слишком большой. Максимум 20 МБ.');
           const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(f);});
           toast('⏳ Загружаю музыку в Google Drive…');
-          await apiPost({action:'upload_audio',book_id:bookId,track_name:trackName,artist:artist,file_name:f.name,mime_type:f.type||'audio/mpeg',file_base64:base64,mood:''});
+          await apiPost({action:'upload_audio',book_id:bookId,title:trackName,artist:artist,file_name:f.name,mime_type:f.type||'audio/mpeg',file_base64:base64});
           await refreshFromSheetsAfterWrite();
         } else {
           if(!url) throw new Error('Выберите аудиофайл или укажите ссылку');
