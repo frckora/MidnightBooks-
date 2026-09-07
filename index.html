@@ -1198,7 +1198,7 @@
   <script>
     "use strict";
     const API_URL =
-      "https://script.google.com/macros/s/AKfycbxY9cfR0PI6diXJ4udNstIGzgSZXJkqksN63CslVrGvn7vajScIULloHK8WtadiYwhEEg/exec";
+      "https://script.google.com/macros/s/AKfycby9OiD-0gw7GDMatWpuWpm2mRlf-iKCwjrQkdP_ei0UfXQtzbL7ud_XgSajnZcYMEhG/exec";
     const SHEETS = {
       books: API_URL + "?action=bootstrap",
       playlists: API_URL + "?action=bootstrap",
@@ -1772,8 +1772,20 @@
     }
     async function fetchRemote(silent = false) {
       if (!silent) showLoading();
-      const data = await jsonpRequest(API_URL + "?action=bootstrap");
-      if (!data || !Array.isArray(data.books)) throw new Error("Google Apps Script не вернул список книг");
+      const [booksRes, filesRes, coversRes] = await Promise.all([
+        jsonpRequest(API_URL + "?action=getBooks"),
+        jsonpRequest(API_URL + "?action=getFiles"),
+        jsonpRequest(API_URL + "?action=getCovers")
+      ]);
+      const data = {
+        books: booksRes?.books || [],
+        files: filesRes?.files || [],
+        covers: coversRes?.covers || [],
+        // В новом backend музыка хранится среди файлов audio/*.
+        playlists: (filesRes?.files || []).filter(f => String(f.mime_type || '').toLowerCase().includes('audio')),
+        announcements: []
+      };
+      if (!Array.isArray(data.books)) throw new Error("Google Apps Script не вернул список книг");
       applyData(data);
       if (data.stats) applyStatsPayload(data);
       persistLocal();
@@ -3182,7 +3194,16 @@
         throw new Error("Не настроен URL Apps Script");
       }
 
-      const body = "data=" + encodeURIComponent(JSON.stringify(payload));
+      // Новый Apps Script принимает JSON напрямую и использует flat-поля.
+      const actionMap = {
+        add_book: "addBook", update_book: "updateBook", delete_book: "deleteBook",
+        upload_cover: "uploadCover", upload_epub: "uploadFile", upload_audio: "uploadFile"
+      };
+      const bodyPayload = Object.assign({}, payload.book || payload);
+      bodyPayload.action = actionMap[payload.action] || payload.action;
+      if (payload.book_id !== undefined) bodyPayload.book_id = payload.book_id;
+      if (payload.file_base64) bodyPayload.file_base64 = payload.file_base64;
+      const body = JSON.stringify(bodyPayload);
 
       // Apps Script Web App не даёт браузеру прочитать обычный POST-ответ
       // из-за CORS. Поэтому запись отправляется no-cors, а результат
@@ -3192,9 +3213,7 @@
           method: "POST",
           mode: "no-cors",
           cache: "no-store",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-          },
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
           body
         });
         return { ok: true, submitted: true };
