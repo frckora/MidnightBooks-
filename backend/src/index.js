@@ -170,7 +170,10 @@ async function uploadJsonRecord(record, env) {
 
   const form = new FormData();
   form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
-  form.set("document", new Blob([bytes], { type: "application/json" }), `${record.record_type}-${record.id}.json`);
+  form.set("message_thread_id", String(env.TELEGRAM_TOPIC_BOOKS || "14"));
+  const safeBase = safeFilePart(record.title || record.id) + " — " + safeFilePart(record.author || "MidnightBooks");
+  form.set("document", new Blob([bytes], { type: "application/json" }), `${safeBase}.json`);
+  form.set("caption", safeBase);
   form.set("disable_notification", "true");
   const message = await telegramCall("sendDocument", env, form);
   const document = message.document;
@@ -297,15 +300,25 @@ async function saveWelcomeText(value, env) {
   return record.text;
 }
 
-async function storeMediaFile(file, mediaType, ownerId, env) {
-  if (!file || !file.size || file.size > 10 * 1024 * 1024 || !String(file.type || "").startsWith("image/")) {
-    const error = new Error("Choose an image up to 10 MB");
+function safeFilePart(value) {
+  return String(value || "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || "Без названия";
+}
+
+async function storeMediaFile(file, mediaType, ownerId, env, options = {}) {
+  const isEpub = mediaType === "epub";
+  const maxBytes = isEpub ? 20 * 1024 * 1024 : 10 * 1024 * 1024;
+  if (!file || !file.size || file.size > maxBytes || (!isEpub && !String(file.type || "").startsWith("image/")) || (isEpub && !String(file.name || "").toLowerCase().endsWith(".epub"))) {
+    const error = new Error(isEpub ? "Choose an EPUB file up to 20 MB" : "Choose an image up to 10 MB");
     error.status = 400;
     throw error;
   }
+  const topicId = isEpub ? env.TELEGRAM_TOPIC_FILES : mediaType === "cover" ? env.TELEGRAM_TOPIC_COVERS : env.TELEGRAM_TOPIC_ARTS;
   const form = new FormData();
   form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
-  form.set("document", file, file.name || "image");
+  if (topicId) form.set("message_thread_id", String(topicId));
+  const fileName = options.fileName || file.name || "image";
+  form.set("document", file, fileName);
+  if (options.caption) form.set("caption", options.caption);
   form.set("disable_notification", "true");
   const message = await telegramCall("sendDocument", env, form);
   const doc = message.document;
@@ -411,11 +424,24 @@ async function route(request, env) {
     if (!existing || existing.deleted_at) return json({ success: false, error: "Book not found" }, 404);
     const form = await request.formData();
     const file = form.get("file");
-    const media = await storeMediaFile(file, "cover", id, env);
+    const media = await storeMediaFile(file, "cover", id, env, { fileName: safeFilePart(existing.title) + " — " + safeFilePart(existing.author) + " — Обложка." + ((file.name.split(".").pop() || "jpg").toLowerCase()), caption: safeFilePart(existing.title) + " — " + safeFilePart(existing.author) + " — Обложка" });
     const record = { ...existing, cover_media_id: media.mediaId, cover_emoji: "", cover_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, updated_at: new Date().toISOString() };
     const pointer = await uploadJsonRecord(record, env);
     await saveRecordPointer(record, pointer, env);
     return json({ success: true, cover_url: record.cover_url, media_id: media.mediaId });
+  }
+
+  const epubMatch = path.match(/^\\/api\\/v1\\/books\\/([^/]+)\\/epub$/);
+  if (epubMatch && method === "POST") {
+    requireAdmin(user, env);
+    const id = decodeURIComponent(epubMatch[1]);
+    const existing = await readRecord("book", id, env);
+    if (!existing || existing.deleted_at) return json({ success: false, error: "Book not found", code: "NOT_FOUND" }, 404);
+    const form = await request.formData();
+    const file = form.get("file");
+    const base = safeFilePart(existing.title) + " — " + safeFilePart(existing.author);
+    const media = await storeMediaFile(file, "epub", id, env, { fileName: base + ".epub", caption: base });
+    return json({ success: true, media_id: media.mediaId, file_name: base + ".epub" }, 201);
   }
 
   if (path === "/api/v1/notifications/subscription" && (method === "POST" || method === "DELETE")) {
@@ -448,7 +474,9 @@ async function route(request, env) {
     if (!parentBook || parentBook.deleted_at) return json({ success: false, error: "Selected book was not found" }, 404);
     const existing = await readRecord("art", id, env);
     if (existing && !existing.deleted_at) return json({ success: false, error: "Art already exists" }, 409);
-    const media = await storeMediaFile(file, "art", id, env);
+    const artBase = safeFilePart(parentBook.title) + " — " + safeFilePart(parentBook.author) + " — " + safeFilePart(title);
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const media = await storeMediaFile(file, "art", id, env, { fileName: artBase + "." + ext, caption: artBase });
     const record = { id, book_id: bookId, title, description, media_id: media.mediaId, image_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
     const pointer = await uploadJsonRecord(record, env);
     await saveRecordPointer(record, pointer, env);
