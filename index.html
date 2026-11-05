@@ -1181,13 +1181,13 @@
         <span class="nav-icon">📚</span>
         <span class="nav-label">Каталог</span>
       </button>
-      <button class="nav-btn" data-page="favorites">
-        <span class="nav-icon">❤️</span>
-        <span class="nav-label">Избранное</span>
+      <button class="nav-btn" data-page="my">
+        <span class="nav-icon">♡</span>
+        <span class="nav-label">Моё</span>
       </button>
-      <button class="nav-btn" data-page="diary">
-        <span class="nav-icon">📖</span>
-        <span class="nav-label">Дневник</span>
+      <button class="nav-btn" data-page="profile">
+        <span class="nav-icon">♙</span>
+        <span class="nav-label">Профиль</span>
       </button>
     </div>
   </nav>
@@ -1963,11 +1963,11 @@
       if (state.page === "catalog") {
         renderCatalog();
       }
-      if (state.page === "favorites") {
-        renderFavorites();
+      if (state.page === "my") {
+        renderMy();
       }
-      if (state.page === "diary") {
-        renderDiary();
+      if (state.page === "profile") {
+        renderProfile();
       }
       updatePlayer();
     }
@@ -2014,74 +2014,27 @@
     // ОСНОВНЫЕ СТРАНИЦЫ
     // =========================
     function renderHome() {
-      const q = quoteOfDay();
-      const sorted = [...state.books]
-        .sort((a, b) =>
-          String(b.release_date)
-            .localeCompare(String(a.release_date))
-        );
-      const popular = [...state.books]
-        .sort((a, b) =>
-          getViews(b.id) - getViews(a.id)
-        )
-        .slice(0, 3);
-      const ann = state.announcements.find(
-        a => String(a.active).toLowerCase() !== "false"
-      ) || null;
+      const latest = [...state.books]
+        .sort((a, b) => String(b.release_date || "").localeCompare(String(a.release_date || "")))
+        .slice(0, 6);
       document.getElementById("main").innerHTML = `
-        <div class="welcome">
-          Добро пожаловать в библиотеку готовых переводов MidnightBooks
-        </div>
-        <div class="quote-card">
-          <div class="quote-text">${h(q.text)}</div>
-          <div class="quote-source">
-            — ${h(q.source)} · цитата дня
-          </div>
-        </div>
-        <div class="action-row">
-          <button class="btn primary" id="randomBtn">
-            🎲 Случайная книга
-          </button>
-          <button class="btn" id="homeChannel">
-            Перейти в канал
-          </button>
-        </div>
-        <div class="section-title">Главная</div>
-        <div class="book-grid">
-          ${sorted.map(bookCard).join("") || '<div class="empty">Книг пока нет.</div>'}
-        </div>
-        <div class="action-row">
-          <button class="btn" id="seeAll">
-            Смотреть все →
-          </button>
-        </div>
-        <div class="section-title">Скоро в библиотеке</div>
-        ${announcementHTML(ann)}
-        <div class="section-title">Популярное</div>
-        <div class="book-grid">
-          ${popular.map(bookCard).join("") || '<div class="empty">Пока нет статистики.</div>'}
-        </div>
+        <div class="section-title">Новые поступления</div>
+        ${latest.length
+          ? `<div class="book-grid catalog-book-grid">${latest.map(bookCard).join("")}</div>`
+          : `<div class="empty">
+               <div style="font-size:30px;margin-bottom:12px;">📚</div>
+               <div style="color:var(--silver2);font-size:17px;margin-bottom:7px;">Библиотека пока пуста</div>
+               <div>Новые книги скоро появятся здесь.</div>
+             </div>`
+        }
+        <button class="btn primary" id="homeCatalog" style="width:100%;margin-top:14px;">
+          Перейти в каталог
+        </button>
       `;
-      document.getElementById("randomBtn")
-        ?.addEventListener("click", () => {
-          if (state.books.length) {
-            openBook(
-              state.books[
-                Math.floor(
-                  Math.random() * state.books.length
-                )
-              ].id,
-              true
-            );
-          }
-        });
-      document.getElementById("homeChannel")
-        ?.addEventListener("click", openChannel);
-      document.getElementById("seeAll")
-        ?.addEventListener("click", () => {
-          state.page = "catalog";
-          render();
-        });
+      document.getElementById("homeCatalog")?.addEventListener("click", () => {
+        state.page = "catalog";
+        render();
+      });
       bindBookClicks();
     }
     function announcementHTML(a) {
@@ -2445,72 +2398,56 @@
       state.seriesView = name;
       render();
     }
-    function renderFavorites() {
+    function renderMy() {
       const ids = getFavoriteIds();
-      const books = state.books.filter(b =>
-        ids.includes(String(b.id))
-      );
+      const favorites = state.books.filter(b => ids.includes(String(b.id)));
+      const read = state.books.filter(b => getStatus(b.id) === "read");
+      const reading = state.books.filter(b => getStatus(b.id) === "reading");
+      const planned = state.books.filter(b => getStatus(b.id) === "planned");
+      const pct = state.books.length ? Math.round(read.length / state.books.length * 100) : 0;
       document.getElementById("main").innerHTML = `
-        <div class="section-title">Избранное</div>
-        ${books.length
-          ? `<div class="book-grid">
-               ${books.map(bookCard).join("")}
-             </div>`
-          : `<div class="empty">
-               🕯️<br><br>
-               Здесь пока ничего нет...
-             </div>`
-        }
-      `;
-      bindBookClicks();
-    }
-    function renderDiary() {
-      const read = state.books.filter(b =>
-        getStatus(b.id) === "read"
-      );
-      const reading = state.books.filter(b =>
-        getStatus(b.id) === "reading"
-      );
-      const planned = state.books.filter(b =>
-        getStatus(b.id) === "planned"
-      );
-      const total = state.books.length;
-      const pct = total
-        ? Math.round(read.length / total * 100)
-        : 0;
-      document.getElementById("main").innerHTML = `
-        <div class="section-title">Дневник</div>
+        <div class="section-title">Моё</div>
         <div class="stats">
           <div class="stat-row">
-            <div>
-              <strong>${read.length}</strong>
-              <span>Прочитано</span>
-            </div>
-            <div>
-              <strong>${reading.length}</strong>
-              <span>Читаю</span>
-            </div>
-            <div>
-              <strong>${planned.length}</strong>
-              <span>В планах</span>
-            </div>
-            <div>
-              <strong>${total}</strong>
-              <span>Всего</span>
-            </div>
+            <div class="stat"><strong>${reading.length}</strong><span>Читаю</span></div>
+            <div class="stat"><strong>${planned.length}</strong><span>В планах</span></div>
+            <div class="stat"><strong>${read.length}</strong><span>Прочитано</span></div>
+            <div class="stat"><strong>${favorites.length}</strong><span>Избранное</span></div>
           </div>
-          <div class="progress">
-            <i style="width:${pct}%"></i>
-          </div>
-          <div style="font:11px Arial;color:var(--muted)">
-            Прочитано ${read.length} из ${total} книг (${pct}%)
-          </div>
+          <div class="progress"><i style="width:${pct}%"></i></div>
+          <div style="font:11px Arial;color:var(--muted)">Прочитано ${read.length} из ${state.books.length} книг (${pct}%)</div>
+        </div>
+        <div class="status-group">
+          <div class="status-title">Избранное</div>
+          ${favorites.length ? `<div class="book-grid catalog-book-grid">${favorites.map(bookCard).join("")}</div>` : '<div class="empty">Здесь пока нет избранных книг.</div>'}
         </div>
         ${statusSection("Читаю сейчас", reading)}
         ${statusSection("В планах", planned)}
         ${statusSection("Прочитано", read)}
       `;
       bindBookClicks();
+    }
+    function renderProfile() {
+      const user = tg()?.initDataUnsafe?.user || null;
+      const name = user ? [user.first_name, user.last_name].filter(Boolean).join(" ") : "Гость";
+      const username = user?.username ? "@" + user.username : "Профиль Telegram";
+      document.getElementById("main").innerHTML = `
+        <div class="section-title">Профиль</div>
+        <div class="admin-box" style="padding:20px;">
+          <div style="font-size:38px;text-align:center;margin-bottom:10px;">♙</div>
+          <div style="font-size:21px;text-align:center;color:var(--silver);">${h(name)}</div>
+          <div style="font:12px Arial;text-align:center;color:var(--muted);margin-top:5px;">${h(username)}</div>
+        </div>
+        <div class="action-row">
+          <button class="btn primary" id="profileAdmin" style="width:100%;">Вход для администратора</button>
+          <button class="btn" id="profileChannel" style="width:100%;">Перейти в канал MidnightBooks</button>
+          <button class="btn" id="profileRefresh" style="width:100%;">Обновить библиотеку</button>
+        </div>
+        <div class="teaser" style="text-align:center;padding:10px 4px;">MidnightBooks</div>
+      `;
+      document.getElementById("profileAdmin")?.addEventListener("click", showAdminLogin);
+      document.getElementById("profileChannel")?.addEventListener("click", openChannel);
+      document.getElementById("profileRefresh")?.addEventListener("click", () => loadData(true));
     }
     function statusSection(title, books) {
       return `<div class="status-group">
