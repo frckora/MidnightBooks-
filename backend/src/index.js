@@ -431,7 +431,7 @@ async function route(request, env) {
     return json({ success: true, cover_url: record.cover_url, media_id: media.mediaId });
   }
 
-  const epubMatch = path.match(/^\\/api\\/v1\\/books\\/([^/]+)\\/epub$/);
+  const epubMatch = path.match(/^\/api\/v1\/books\/([^/]+)\/epub$/);
   if (epubMatch && method === "POST") {
     requireAdmin(user, env);
     const id = decodeURIComponent(epubMatch[1]);
