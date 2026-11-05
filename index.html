@@ -1051,11 +1051,13 @@
     .nav-btn:active {
       transform: scale(.92);
     }
-    .nav-icon {
-      display: block;
-      font-size: 20px;
-      line-height: 22px;
-    }
+    .nav-icon { display:flex; align-items:center; justify-content:center; height:27px; margin-bottom:3px; }
+    .ui-icon { display:inline-block; vertical-align:middle; flex:none; }
+    .notify-card { display:flex; align-items:center; gap:14px; margin-top:14px; padding:17px; border:1px solid rgba(201,199,200,.17); border-radius:18px; background:linear-gradient(145deg,rgba(48,27,34,.9),rgba(25,14,19,.94)); }
+    .notify-card .notify-copy { flex:1; min-width:0; }
+    .notify-card .notify-title { color:var(--silver2); font-size:16px; margin-bottom:5px; }
+    .notify-card .notify-note { color:var(--muted); font:12px Arial,sans-serif; line-height:1.45; }
+    .notify-card .btn { white-space:nowrap; }
     .nav-label {
       font: 9px Arial,
            sans-serif;
@@ -1136,9 +1138,7 @@
           <button class="btn" id="aboutBtn">
             О нас
           </button>
-          <button class="icon-btn" id="refreshBtn" title="Обновить">
-            ↻
-          </button>
+          <button class="icon-btn" id="refreshBtn" title="Обновить"><svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0 1 4"/></svg></button>
         </div>
       </div>
     </header>
@@ -1174,19 +1174,19 @@
   <nav class="bottom-nav">
     <div class="nav-inner">
       <button class="nav-btn active" data-page="home">
-        <span class="nav-icon">🏠</span>
+        <span class="nav-icon"><svg class="ui-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7"/><path d="M5 9v12h14V9"/><path d="M9 21v-7h6v7"/></svg></span>
         <span class="nav-label">Главная</span>
       </button>
       <button class="nav-btn" data-page="catalog">
-        <span class="nav-icon">📚</span>
+        <span class="nav-icon"><svg class="ui-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/><path d="M8 7h8M8 11h8"/></svg></span>
         <span class="nav-label">Каталог</span>
       </button>
       <button class="nav-btn" data-page="my">
-        <span class="nav-icon">♡</span>
+        <span class="nav-icon"><svg class="ui-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 8.7c0 5.2-8.8 11-8.8 11S3.2 13.9 3.2 8.7A4.7 4.7 0 0 1 12 6.2a4.7 4.7 0 0 1 8.8 2.5Z"/></svg></span>
         <span class="nav-label">Моё</span>
       </button>
       <button class="nav-btn" data-page="profile">
-        <span class="nav-icon">♙</span>
+        <span class="nav-icon"><svg class="ui-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c.4-4 3.1-6 7-6s6.6 2 7 6"/></svg></span>
         <span class="nav-label">Профиль</span>
       </button>
     </div>
@@ -1238,6 +1238,8 @@
 
     const state = {
       page: "home",
+      welcomeText: "",
+      notificationsSubscribed: false,
       catalogMode: "books",
       search: "",
       sort: "date",
@@ -1829,6 +1831,8 @@
         playlists: Array.isArray(payload.music) ? payload.music : [],
         announcements: Array.isArray(payload.announcements) ? payload.announcements : []
       };
+      state.welcomeText = String(payload.welcomeText || "");
+      state.notificationsSubscribed = !!payload.notificationsSubscribed;
       applyData(data);
       applyStatsPayload({ stats: payload.stats || [], ratings: payload.ratings || [] });
       state.books = state.books.map(book => {
@@ -2014,28 +2018,52 @@
     // ОСНОВНЫЕ СТРАНИЦЫ
     // =========================
     function renderHome() {
-      const latest = [...state.books]
-        .sort((a, b) => String(b.release_date || "").localeCompare(String(a.release_date || "")))
-        .slice(0, 6);
+      const latest = [...state.books].filter(book => book.status !== "draft")
+        .sort((a,b) => String(b.release_date||"").localeCompare(String(a.release_date||""))).slice(0,6);
+      const welcome = String(state.welcomeText || "").trim();
+      const subscribed = !!state.notificationsSubscribed;
       document.getElementById("main").innerHTML = `
+        ${welcome ? `<section class="welcome">${h(welcome)}</section>` : ""}
+        <div class="notify-card">
+          <div style="color:var(--silver2)"><svg class="ui-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></div>
+          <div class="notify-copy">
+            <div class="notify-title">Новые книги — сразу тебе</div>
+            <div class="notify-note">Получай уведомления, когда в библиотеке выходит новая книга.</div>
+          </div>
+          <button class="btn ${subscribed ? "" : "primary"}" id="notificationToggle">${subscribed ? "Вы подписаны" : "Подписаться"}</button>
+        </div>
         <div class="section-title">Новые поступления</div>
-        ${latest.length
-          ? `<div class="book-grid catalog-book-grid">${latest.map(bookCard).join("")}</div>`
-          : `<div class="empty">
-               <div style="font-size:30px;margin-bottom:12px;">📚</div>
-               <div style="color:var(--silver2);font-size:17px;margin-bottom:7px;">Библиотека пока пуста</div>
-               <div>Новые книги скоро появятся здесь.</div>
-             </div>`
-        }
-        <button class="btn primary" id="homeCatalog" style="width:100%;margin-top:14px;">
-          Перейти в каталог
-        </button>
+        ${latest.length ? `<div class="book-grid catalog-book-grid">${latest.map(bookCard).join("")}</div>` :
+          `<div class="empty" style="text-align:center;padding:28px 18px;">
+            <div style="color:var(--silver2);margin-bottom:12px;"><svg class="ui-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/><path d="M8 7h8M8 11h8"/></svg></div>
+            <div style="color:var(--silver2);font-size:17px;margin-bottom:7px;">Библиотека пока пуста</div>
+            <div>Новые книги скоро появятся здесь.</div>
+          </div>`}
+        <button class="btn primary" id="homeCatalog" style="width:100%;margin-top:14px;">Перейти в каталог</button>
       `;
-      document.getElementById("homeCatalog")?.addEventListener("click", () => {
-        state.page = "catalog";
-        render();
-      });
+      document.getElementById("homeCatalog")?.addEventListener("click", () => { state.page="catalog"; render(); });
+      document.getElementById("notificationToggle")?.addEventListener("click", toggleNotifications);
       bindBookClicks();
+    }
+    async function toggleNotifications() {
+      const app = tg();
+      if (!app?.initData) { toast("Открой MidnightBooks через Telegram"); return; }
+      const button = document.getElementById("notificationToggle");
+      if (button) { button.disabled=true; button.textContent="Секунду…"; }
+      try {
+        const method = state.notificationsSubscribed ? "DELETE" : "POST";
+        const response = await fetch(WORKER_API_URL + "/api/v1/notifications/subscription", {
+          method, headers: {"Content-Type":"application/json","X-Telegram-Init-Data":app.initData}, cache:"no-store"
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || "Не удалось изменить подписку");
+        state.notificationsSubscribed = method === "POST";
+        render();
+        toast(state.notificationsSubscribed ? "Подписка на новые книги включена" : "Уведомления отключены");
+      } catch(error) {
+        toast(error.message || "Ошибка подписки");
+        if (button) { button.disabled=false; button.textContent=state.notificationsSubscribed ? "Вы подписаны" : "Подписаться"; }
+      }
     }
     function announcementHTML(a) {
       if (!a) {
@@ -3088,15 +3116,34 @@
       const container = document.getElementById("adminContent");
       container.innerHTML = `
         <div class="admin-grid">
-          <button class="btn admin-tab-btn" data-admin-tab="books" onclick="adminTab('books')">📚 Книги</button>
-          <button class="btn admin-tab-btn" data-admin-tab="playlist" onclick="adminTab('playlist')">🎵 Плейлисты</button>
-          <button class="btn admin-tab-btn" data-admin-tab="announce" onclick="adminTab('announce')">📢 Анонсы</button>
-          <button class="btn admin-tab-btn" data-admin-tab="stats" onclick="adminTab('stats')">📊 Статистика</button>
+          <button class="btn admin-tab-btn" data-admin-tab="books" onclick="adminTab('books')">Книги</button>
+          <button class="btn admin-tab-btn" data-admin-tab="welcome" onclick="adminTab('welcome')">Приветствие</button>
+          <button class="btn admin-tab-btn" data-admin-tab="stats" onclick="adminTab('stats')">Статистика</button>
         </div>
         <div id="adminTabContent"></div>
         <button class="btn" onclick="closeAdminPanel()" style="width:100%;margin-top:12px;">🚪 Выйти</button>
       `;
       adminTab("books");
+    }
+    async function renderAdminWelcome(container) {
+      const current = state.welcomeText || "";
+      container.innerHTML = `
+        <div class="admin-box">
+          <h3 style="color:var(--silver2);">Приветственное слово на главной</h3>
+          <p style="color:var(--muted);font:12px Arial,sans-serif;line-height:1.5;">Этот текст будет виден всем посетителям главной страницы.</p>
+          <textarea id="welcomeTextInput" class="admin-input" rows="5" placeholder="Напиши приветственное слово…">${h(current)}</textarea>
+          <button class="btn primary" id="saveWelcomeText" style="width:100%;margin-top:8px;">Сохранить приветствие</button>
+        </div>`;
+      document.getElementById("saveWelcomeText")?.addEventListener("click", async () => {
+        const app=tg(); if(!app?.initData){toast("Открой приложение через Telegram");return;}
+        const value=document.getElementById("welcomeTextInput").value.trim();
+        const button=document.getElementById("saveWelcomeText"); button.disabled=true; button.textContent="Сохраняем…";
+        try {
+          const response=await fetch(WORKER_API_URL+"/api/v1/settings/welcome",{method:"PUT",headers:{"Content-Type":"application/json","X-Telegram-Init-Data":app.initData},body:JSON.stringify({text:value})});
+          const result=await response.json(); if(!response.ok||!result.success) throw new Error(result.error||"Не удалось сохранить приветствие");
+          state.welcomeText=value; toast("Приветствие сохранено"); renderAdminWelcome(container);
+        } catch(e){toast(e.message||"Ошибка сохранения");button.disabled=false;button.textContent="Сохранить приветствие";}
+      });
     }
     function adminTab(tab) {
       document.querySelectorAll('.admin-tab-btn').forEach(btn => {
@@ -3105,8 +3152,7 @@
       const container = document.getElementById("adminTabContent");
       if (!container) return;
       if (tab === "books") renderAdminBooks(container);
-      if (tab === "playlist") renderAdminPlaylists(container);
-      if (tab === "announce") renderAdminAnnounce(container);
+      if (tab === "welcome") renderAdminWelcome(container);
       if (tab === "stats") renderAdminStats(container);
     }
 
