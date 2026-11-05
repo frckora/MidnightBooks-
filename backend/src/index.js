@@ -141,7 +141,6 @@ async function telegramCall(method, env, body) {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.ok) {
-    // Avoid returning Telegram internals or secrets to the browser.
     console.error("Telegram API operation failed:", method, response.status, payload?.error_code || "");
     const error = new Error("Telegram storage operation failed");
     error.status = 502;
@@ -287,6 +286,14 @@ async function route(request, env) {
   try { user = await authenticate(request, env); } catch (error) {
     const code = error instanceof Error ? error.message : "AUTH_FAILED";
     return json({ success: false, error: "Telegram authentication failed", code }, 401);
+  }
+
+  if (method === "GET" && path === "/api/v1/me") {
+    return json({
+      success: true,
+      user: { id: String(user.id) },
+      isAdmin: isAdmin(user, env),
+    });
   }
 
   if (method === "GET" && path === "/api/v1/bootstrap") {
