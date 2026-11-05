@@ -170,7 +170,7 @@ async function uploadJsonRecord(record, env) {
 
   const form = new FormData();
   form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
-  form.set("message_thread_id", String(env.TELEGRAM_TOPIC_BOOKS || "14"));
+  form.set("message_thread_id", "14"); // Книги
   const safeBase = safeFilePart(record.title || record.id) + " — " + safeFilePart(record.author || "MidnightBooks");
   form.set("document", new Blob([bytes], { type: "application/json" }), `${safeBase}.json`);
   form.set("caption", safeBase);
@@ -312,7 +312,7 @@ async function storeMediaFile(file, mediaType, ownerId, env, options = {}) {
     error.status = 400;
     throw error;
   }
-  const topicId = isEpub ? env.TELEGRAM_TOPIC_FILES : mediaType === "cover" ? env.TELEGRAM_TOPIC_COVERS : env.TELEGRAM_TOPIC_ARTS;
+  const topicId = isEpub ? "16" : mediaType === "cover" ? "2" : "15"; // EPUB: Файлы, обложки: Обложки, арты: Арты
   const form = new FormData();
   form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
   if (topicId) form.set("message_thread_id", String(topicId));
