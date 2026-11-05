@@ -331,6 +331,68 @@ async function storeMediaFile(file, mediaType, ownerId, env, options = {}) {
   return { mediaId, fileId: doc.file_id };
 }
 
+async function deleteTelegramMessage(chatId, messageId, env) {
+  if (!chatId || !messageId) return;
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  form.set("message_id", String(messageId));
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteMessage`, { method: "POST", body: form });
+  const payload = await response.json();
+  if (!payload.ok) {
+    const error = new Error(payload.description || "Telegram message deletion failed");
+    error.status = 502;
+    throw error;
+  }
+}
+
+async function deleteBookFiles(bookId, env) {
+  const artRows = await env.DB.prepare(
+    "SELECT record_id, chat_id, message_id, telegram_file_id FROM telegram_records WHERE record_type = 'art'"
+  ).all();
+  const relatedArtIds = [];
+  const messages = [];
+  for (const row of artRows.results || []) {
+    try {
+      const art = await readTelegramJson(row.telegram_file_id, env);
+      if (art && String(art.book_id) === String(bookId)) {
+        relatedArtIds.push(String(row.record_id));
+        messages.push({ chatId: row.chat_id, messageId: row.message_id });
+      }
+    } catch (error) {
+      console.error("Unable to inspect art record during book deletion:", row.record_id, error.message);
+    }
+  }
+
+  const bookRecord = await env.DB.prepare(
+    "SELECT chat_id, message_id FROM telegram_records WHERE record_type = 'book' AND record_id = ?"
+  ).bind(String(bookId)).first();
+  if (bookRecord) messages.push({ chatId: bookRecord.chat_id, messageId: bookRecord.message_id });
+
+  const mediaRows = await env.DB.prepare(
+    "SELECT media_id, chat_id, message_id FROM media_pointers WHERE book_id = ?"
+  ).bind(String(bookId)).all();
+  for (const row of mediaRows.results || []) messages.push({ chatId: row.chat_id, messageId: row.message_id });
+
+  for (const artId of relatedArtIds) {
+    const artMedia = await env.DB.prepare(
+      "SELECT media_id, chat_id, message_id FROM media_pointers WHERE book_id = ?"
+    ).bind(artId).all();
+    for (const row of artMedia.results || []) messages.push({ chatId: row.chat_id, messageId: row.message_id });
+  }
+
+  const uniqueMessages = [...new Map(messages.filter(x => x.chatId && x.messageId).map(x => [String(x.chatId) + ":" + String(x.messageId), x])).values()];
+  for (const message of uniqueMessages) await deleteTelegramMessage(message.chatId, message.messageId, env);
+
+  await env.DB.prepare("DELETE FROM media_pointers WHERE book_id = ?").bind(String(bookId)).run();
+  for (const artId of relatedArtIds) {
+    await env.DB.prepare("DELETE FROM media_pointers WHERE book_id = ?").bind(artId).run();
+    await env.DB.prepare("DELETE FROM telegram_records WHERE record_type = 'art' AND record_id = ?").bind(artId).run();
+  }
+  await env.DB.prepare("DELETE FROM telegram_records WHERE record_type = 'book' AND record_id = ?").bind(String(bookId)).run();
+  await env.DB.prepare("DELETE FROM book_lookup WHERE book_id = ?").bind(String(bookId)).run();
+  return { deletedMessages: uniqueMessages.length, deletedArts: relatedArtIds.length };
+}
+
 async function mediaResponse(mediaId, env) {
   const row = await env.DB.prepare("SELECT telegram_file_id FROM media_pointers WHERE media_id = ?").bind(mediaId).first();
   if (!row?.telegram_file_id) return json({ success: false, error: "Media not found" }, 404);
@@ -485,10 +547,8 @@ async function route(request, env) {
     const id = decodeURIComponent(artMatch[1]);
     const existing = await readRecord("art", id, env);
     if (!existing || existing.deleted_at) return json({ success: false, error: "Art not found" }, 404);
-    const record = { ...existing, deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-    const pointer = await uploadJsonRecord(record, env);
-    await saveRecordPointer(record, pointer, env);
-    return json({ success: true, id, deleted: true });
+    const deletion = await deleteBookFiles(id, env);
+    return json({ success: true, id, deleted: true, deletedMessages: deletion.deletedMessages, deletedArts: deletion.deletedArts });
   }
 
   if (path === "/api/v1/settings/welcome" && method === "PUT") {
