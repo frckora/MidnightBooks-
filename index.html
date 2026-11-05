@@ -2031,7 +2031,7 @@
       const welcome = String(state.welcomeText || "").trim();
       const subscribed = !!state.notificationsSubscribed;
       document.getElementById("main").innerHTML = `
-        <section class="welcome" aria-label="Приветственное слово">${welcome ? h(welcome) : ""}</section>
+        <section class="welcome" aria-label="Приветственное слово"><div style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--silver2);margin-bottom:8px;">Приветственное слово</div>${welcome ? h(welcome) : ""}</section>
         <div class="notify-card">
           <div style="color:var(--silver2)"><svg class="ui-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></div>
           <div class="notify-copy">
@@ -2625,20 +2625,6 @@
                 ${art.description ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;">${h(art.description)}</div>` : ""}
               </figure>`).join("")}</div>`
           : '<div class="empty">Арты пока не добавлены.</div>';
-      }
-      if (state.modalTab === "playlist") {
-        return tracks.length
-          ? tracks.map((t, i) =>
-              `<div class="track ${state.player.tracks === tracks && state.player.index === i ? "active" : ""}"
-                   data-track="${i}">
-                <div class="track-play"></div>
-                <div class="track-info">
-                  <strong>${h(t.name)}</strong>
-                  <span>${h(t.artist)}</span>
-                </div>
-              </div>`
-            ).join("")
-          : '<div class="empty">Плейлист пока не добавлен.</div>';
       }
       if (state.modalTab === "quotes") {
         return quotes.length
