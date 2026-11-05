@@ -3169,39 +3169,70 @@
       return /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(String(STATS_API || '').trim());
     }
     async function apiPost(payload) {
-      if (!apiReady()) throw new Error("Не настроен URL Apps Script");
-
       const p = { ...payload };
-      const oldAction = p.action;
+      const action = p.action;
+      const bookActions = ["add_book", "update_book", "delete_book"];
 
-      // Адаптер старого интерфейса MidnightBooks к новому Apps Script.
-      if (oldAction === "add_book") {
-        Object.assign(p, p.book || {});
-        delete p.book;
-        p.action = "addBook";
-      } else if (oldAction === "update_book") {
-        Object.assign(p, p.book || {});
-        delete p.book;
-        p.action = "updateBook";
-      } else if (oldAction === "delete_book") {
-        p.id = p.book_id || p.id;
-        p.action = "deleteBook";
-      } else if (["upload_cover","upload_epub","upload_audio"].includes(oldAction)) {
+      if (bookActions.includes(action)) {
+        const app = tg();
+        const initData = app && app.initData;
+        if (!initData) throw new Error("Откройте приложение через Telegram");
+        let url = WORKER_API_URL + "/api/v1/books";
+        let method = "POST";
+        let body;
+
+        if (action === "add_book") {
+          body = { book: p.book || p };
+        } else {
+          const id = normalizeAdminId(p.book_id || p.id || p.book?.id);
+          if (!id) throw new Error("Не указан ID книги");
+          url += "/" + encodeURIComponent(id);
+          if (action === "update_book") {
+            method = "PATCH";
+            body = { book: p.book || p };
+          } else {
+            method = "DELETE";
+          }
+        }
+
+        const response = await fetch(url, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Init-Data": initData
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          cache: "no-store"
+        });
+        let result;
+        try { result = await response.json(); }
+        catch { throw new Error("Worker вернул некорректный ответ"); }
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || "Worker не подтвердил сохранение");
+        }
+        return result;
+      }
+
+      // Остальные функции пока остаются на прежнем API до переноса
+      // загрузки медиа, пользовательской библиотеки и статистики.
+      if (!apiReady()) throw new Error("Старый API временно недоступен");
+      if (["upload_cover","upload_epub","upload_audio"].includes(action)) {
         p.file_data = p.file_base64 || p.file_data;
-        p.file_type = oldAction === "upload_audio" ? "audio" :
-                      oldAction === "upload_cover" ? "image" : "book";
+        p.file_type = action === "upload_audio" ? "audio" :
+                      action === "upload_cover" ? "image" : "book";
         delete p.file_base64;
-        p.action = oldAction === "upload_cover" ? "uploadCover" : oldAction === "upload_audio" ? "uploadMusic" : "uploadFile";
-      } else if (oldAction === "delete_playlist") {
+        p.action = action === "upload_cover" ? "uploadCover" :
+                   action === "upload_audio" ? "uploadMusic" : "uploadFile";
+      } else if (action === "delete_playlist") {
         p.action = "deleteMusic";
-      } else if (oldAction === "save_announcement") {
+      } else if (action === "save_announcement") {
         Object.assign(p, p.announcement || {});
         delete p.announcement;
         if (p.id && p.id !== "1") p.action = "updateAnnouncement";
         else { delete p.id; p.action = "addAnnouncement"; }
         p.text = p.text || p.teaser || "";
         p.status = p.active === "FALSE" ? "inactive" : "active";
-      } else if (oldAction === "add_playlist") {
+      } else if (action === "add_playlist") {
         throw new Error("Прямая ссылка на музыку не поддерживается сервером. Загрузите аудиофайл.");
       }
 
@@ -3210,22 +3241,12 @@
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify(p)
       });
-
-      if (!response.ok) {
-        throw new Error("Ошибка сервера: HTTP " + response.status);
-      }
-
+      if (!response.ok) throw new Error("Ошибка сервера: HTTP " + response.status);
       const result = await response.json();
-
       if (!result || result.success === false || result.ok === false) {
         throw new Error(result?.error || "Сервер не подтвердил сохранение");
       }
-
-      // Приводим новый ответ к формату, который ожидает старый интерфейс.
-      if (result.book && !result.id) {
-        result.id = result.book.id;
-      }
-
+      if (result.book && !result.id) result.id = result.book.id;
       return result;
     }
 
