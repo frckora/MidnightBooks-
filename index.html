@@ -3463,7 +3463,7 @@
           await uploadEpub(id, fileInput);
           toast('✅ Книга и EPUB сохранены');
         } else {
-          toast('✅ Книга сохранена в Google Таблицу');
+          toast('✅ Данные книги сохранены в Telegram-хранилище');
         }
         // Не перезаписываем state сразу данными bootstrap: Google Sheets/App Script
         // может вернуть старую версию таблицы и удалить только что добавленные книги из интерфейса.
@@ -3478,7 +3478,7 @@
         await apiPost({action:'delete_book', book_id:id});
         state.books = state.books.filter(b => getAdminBookId(b) !== id);
         persistLocal();
-        toast('🗑️ Книга удалена из Google Таблицы');
+        toast('🗑️ Книга удалена из Telegram-хранилища');
         adminTab('books');
         render();
       } catch(e) { toast('❌ '+(e.message||'Ошибка удаления')); }
