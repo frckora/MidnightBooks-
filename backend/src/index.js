@@ -1,15 +1,16 @@
 /**
- * MidnightBooks API — Cloudflare Worker scaffold.
+ * MidnightBooks API — Telegram-first storage adapter (books/bootstrap phase).
  *
- * This is a scaffold, not a deployed production API.
- * Configure TELEGRAM_BOT_TOKEN and ADMIN_TELEGRAM_USER_IDS as Worker secrets.
- * Bind the D1 technical pointer index as DB (see wrangler.toml).
+ * Canonical book records are JSON documents uploaded to the private Telegram
+ * storage chat. D1 stores only Telegram pointers and normalized lookup fields.
  */
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
 };
+
+const MAX_JSON_BYTES = 512 * 1024;
 
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
@@ -18,22 +19,14 @@ function json(data, status = 200, extraHeaders = {}) {
   });
 }
 
-function allowedOrigin(request, env) {
-  const origin = request.headers.get("Origin") || "";
-  const configured = (env.ALLOWED_ORIGINS || "https://frckora.github.io")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  return configured.includes(origin) ? origin : "";
-}
-
 function corsHeaders(request, env) {
-  const origin = allowedOrigin(request, env);
-  if (!origin) return {};
+  const origin = request.headers.get("Origin") || "";
+  const allowed = (env.ALLOWED_ORIGINS || "https://frckora.github.io")
+    .split(",").map((v) => v.trim()).filter(Boolean);
+  if (!origin || !allowed.includes(origin)) return {};
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-headers": "content-type,authorization,x-telegram-init-data",
     "access-control-max-age": "86400",
     vary: "Origin",
@@ -42,17 +35,13 @@ function corsHeaders(request, env) {
 
 async function hmacSha256(keyBytes, message) {
   const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+    "raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, message));
 }
 
 function hex(bytes) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function constantTimeEqual(a, b) {
@@ -62,29 +51,21 @@ function constantTimeEqual(a, b) {
   return mismatch === 0;
 }
 
-/**
- * Validate Telegram Mini App initData according to Telegram's WebApp validation
- * algorithm. Returns parsed user data only after signature and auth_date checks.
- */
 async function validateTelegramInitData(initData, botToken, maxAgeSeconds = 86400) {
   if (!initData || !botToken) throw new Error("AUTH_REQUIRED");
-
   const params = new URLSearchParams(initData);
   const receivedHash = params.get("hash");
   if (!receivedHash) throw new Error("INVALID_INIT_DATA");
   params.delete("hash");
 
   const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b));
-  const dataCheckString = entries.map(([key, value]) => `${key}=${value}`).join("\n");
-
-  // Telegram's WebApp secret key: HMAC_SHA256("WebAppData", bot_token)
+  const checkString = entries.map(([k, v]) => `${k}=${v}`).join("\n");
   const secretKey = await hmacSha256(
     new TextEncoder().encode("WebAppData"),
     new TextEncoder().encode(botToken),
   );
-  const calculatedHash = hex(await hmacSha256(secretKey, dataCheckString));
-
-  if (!constantTimeEqual(calculatedHash, receivedHash)) throw new Error("INVALID_INIT_DATA");
+  const calculated = hex(await hmacSha256(secretKey, checkString));
+  if (!constantTimeEqual(calculated, receivedHash)) throw new Error("INVALID_INIT_DATA");
 
   const authDate = Number(params.get("auth_date") || 0);
   const now = Math.floor(Date.now() / 1000);
@@ -92,30 +73,202 @@ async function validateTelegramInitData(initData, botToken, maxAgeSeconds = 8640
     throw new Error("EXPIRED_INIT_DATA");
   }
 
-  let user = null;
-  const rawUser = params.get("user");
-  if (rawUser) {
-    try { user = JSON.parse(rawUser); } catch { throw new Error("INVALID_USER_DATA"); }
+  let user;
+  try { user = JSON.parse(params.get("user") || "null"); } catch {
+    throw new Error("INVALID_USER_DATA");
   }
   if (!user || !Number.isSafeInteger(Number(user.id))) throw new Error("INVALID_USER_DATA");
-
-  return { user, authDate };
+  return user;
 }
 
 async function authenticate(request, env) {
   const initData = request.headers.get("X-Telegram-Init-Data")
     || (request.headers.get("Authorization") || "").replace(/^tma\s+/i, "");
-
-  const validated = await validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
-  return validated.user;
+  return validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
 }
 
 function isAdmin(user, env) {
   const ids = (env.ADMIN_TELEGRAM_USER_IDS || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
+    .split(",").map((v) => v.trim()).filter(Boolean);
   return ids.includes(String(user.id));
+}
+
+function requireAdmin(user, env) {
+  if (!isAdmin(user, env)) {
+    const error = new Error("FORBIDDEN");
+    error.status = 403;
+    throw error;
+  }
+}
+
+function normalizeBook(input, existing = {}) {
+  const book = { ...existing, ...input };
+  const id = String(book.id || book.book_id || "").trim();
+  const title = String(book.title || book.name || "").trim();
+  const author = String(book.author || "").trim();
+  if (!id || !title || !author) {
+    const error = new Error("Book id, title and author are required");
+    error.status = 400;
+    throw error;
+  }
+  return {
+    ...book,
+    id,
+    title,
+    author,
+    series: book.series ? String(book.series).trim() : "",
+    series_order: book.series_order == null ? "" : String(book.series_order),
+    trops: Array.isArray(book.trops) ? book.trops : [],
+    triggers: Array.isArray(book.triggers) ? book.triggers : [],
+    quotes: Array.isArray(book.quotes) ? book.quotes : [],
+    description: String(book.description || ""),
+    status: String(book.status || "published"),
+    schema_version: 1,
+    record_type: "book",
+    updated_at: new Date().toISOString(),
+    deleted_at: book.deleted_at || null,
+  };
+}
+
+function normalizeText(value) {
+  return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("ru");
+}
+
+async function telegramCall(method, env, body) {
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: "POST",
+    body,
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.ok) {
+    // Avoid returning Telegram internals or secrets to the browser.
+    console.error("Telegram API operation failed:", method, response.status, payload?.error_code || "");
+    const error = new Error("Telegram storage operation failed");
+    error.status = 502;
+    throw error;
+  }
+  return payload.result;
+}
+
+async function uploadJsonRecord(record, env) {
+  if (!env.TELEGRAM_STORAGE_CHAT_ID) {
+    const error = new Error("Telegram storage chat is not configured");
+    error.status = 503;
+    throw error;
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(record));
+  if (bytes.byteLength > MAX_JSON_BYTES) {
+    const error = new Error("Record is too large");
+    error.status = 413;
+    throw error;
+  }
+
+  const form = new FormData();
+  form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
+  form.set("document", new Blob([bytes], { type: "application/json" }), `${record.record_type}-${record.id}.json`);
+  form.set("disable_notification", "true");
+  const message = await telegramCall("sendDocument", env, form);
+  const document = message.document;
+  if (!document?.file_id) {
+    const error = new Error("Telegram did not return a document file id");
+    error.status = 502;
+    throw error;
+  }
+  return {
+    chatId: String(message.chat.id),
+    messageId: Number(message.message_id),
+    fileId: document.file_id,
+  };
+}
+
+async function saveRecordPointer(record, pointer, env) {
+  const updatedAt = record.updated_at || new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO telegram_records
+      (record_type, record_id, chat_id, message_id, telegram_file_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(record_type, record_id) DO UPDATE SET
+      chat_id = excluded.chat_id,
+      message_id = excluded.message_id,
+      telegram_file_id = excluded.telegram_file_id,
+      updated_at = excluded.updated_at
+  `).bind(record.record_type, record.id, pointer.chatId, pointer.messageId, pointer.fileId, updatedAt).run();
+
+  if (record.record_type === "book") {
+    await env.DB.prepare(`
+      INSERT INTO book_lookup
+        (book_id, normalized_title, normalized_author, series_id, series_position,
+         record_chat_id, record_message_id, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(book_id) DO UPDATE SET
+        normalized_title = excluded.normalized_title,
+        normalized_author = excluded.normalized_author,
+        series_id = excluded.series_id,
+        series_position = excluded.series_position,
+        record_chat_id = excluded.record_chat_id,
+        record_message_id = excluded.record_message_id,
+        updated_at = excluded.updated_at
+    `).bind(
+      record.id, normalizeText(record.title), normalizeText(record.author),
+      record.series || null, Number.parseFloat(record.series_order) || null,
+      pointer.chatId, pointer.messageId, updatedAt,
+    ).run();
+  }
+}
+
+async function readTelegramJson(fileId, env) {
+  const form = new FormData();
+  form.set("file_id", fileId);
+  const file = await telegramCall("getFile", env, form);
+  if (!file?.file_path) throw new Error("Telegram file path is unavailable");
+  const url = `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Unable to download Telegram record");
+  const text = await response.text();
+  try { return JSON.parse(text); } catch {
+    throw new Error("Stored Telegram record is not valid JSON");
+  }
+}
+
+async function readRecord(recordType, recordId, env) {
+  const pointer = await env.DB.prepare(`
+    SELECT telegram_file_id FROM telegram_records
+    WHERE record_type = ? AND record_id = ?
+  `).bind(recordType, recordId).first();
+  if (!pointer?.telegram_file_id) return null;
+  return readTelegramJson(pointer.telegram_file_id, env);
+}
+
+async function readAllBooks(env) {
+  const rows = await env.DB.prepare(`
+    SELECT record_id, telegram_file_id FROM telegram_records
+    WHERE record_type = 'book' AND telegram_file_id IS NOT NULL
+    ORDER BY updated_at DESC
+  `).all();
+  const books = [];
+  for (const row of rows.results || []) {
+    try {
+      const book = await readTelegramJson(row.telegram_file_id, env);
+      if (book && !book.deleted_at) books.push(book);
+    } catch (error) {
+      console.error("Unable to read stored book record:", row.record_id, error.message);
+    }
+  }
+  return books;
+}
+
+async function readJsonBody(request) {
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).byteLength > MAX_JSON_BYTES) {
+    const error = new Error("Request body is too large");
+    error.status = 413;
+    throw error;
+  }
+  try { return JSON.parse(raw); } catch {
+    const error = new Error("Request body must be valid JSON");
+    error.status = 400;
+    throw error;
+  }
 }
 
 async function route(request, env) {
@@ -124,64 +277,90 @@ async function route(request, env) {
   const method = request.method.toUpperCase();
 
   if (method === "GET" && path === "/api/v1/health") {
-    return json({ success: true, service: "midnightbooks-api", status: "scaffold" });
+    return json({ success: true, service: "midnightbooks-api", status: "telegram-books-adapter" });
   }
-
   if (path === "/api/v1" || path === "/api/v1/") {
     return json({ success: true, service: "midnightbooks-api", version: 1 });
   }
 
-  // All routes below this point require verified Telegram Mini App initData.
   let user;
-  try {
-    user = await authenticate(request, env);
-  } catch (error) {
+  try { user = await authenticate(request, env); } catch (error) {
     const code = error instanceof Error ? error.message : "AUTH_FAILED";
     return json({ success: false, error: "Telegram authentication failed", code }, 401);
   }
 
   if (method === "GET" && path === "/api/v1/bootstrap") {
-    // TODO: load Telegram canonical records via the Telegram storage adapter,
-    // using D1 only for message pointers and search/index metadata.
+    const books = await readAllBooks(env);
     return json({
-      success: true,
-      books: [],
-      covers: [],
-      files: [],
-      arts: [],
-      stats: [],
-      ratings: [],
-      music: [],
-      announcements: [],
-      migrationStatus: "storage-adapter-not-configured",
+      success: true, books, covers: [], files: [], arts: [],
+      stats: [], ratings: [], music: [], announcements: [],
+      migrationStatus: "telegram-books-active",
     });
   }
 
-  if (path.startsWith("/api/v1/admin/") && !isAdmin(user, env)) {
-    return json({ success: false, error: "Administrator access required", code: "FORBIDDEN" }, 403);
+  if (path === "/api/v1/books" && method === "POST") {
+    requireAdmin(user, env);
+    const body = await readJsonBody(request);
+    const record = normalizeBook(body.book || body);
+    const existing = await readRecord("book", record.id, env);
+    if (existing && !existing.deleted_at) {
+      return json({ success: false, error: "Book already exists", code: "CONFLICT" }, 409);
+    }
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, id: record.id }, 201);
   }
 
-  // Catalogue, media, user-library and statistics handlers are added only after
-  // the private Telegram storage group and D1 binding have been provisioned.
+  const bookMatch = path.match(/^\/api\/v1\/books\/([^/]+)$/);
+  if (bookMatch && method === "PATCH") {
+    requireAdmin(user, env);
+    const id = decodeURIComponent(bookMatch[1]);
+    const existing = await readRecord("book", id, env);
+    if (!existing || existing.deleted_at) {
+      return json({ success: false, error: "Book not found", code: "NOT_FOUND" }, 404);
+    }
+    const body = await readJsonBody(request);
+    const record = normalizeBook(body.book || body, existing);
+    if (record.id !== id) {
+      return json({ success: false, error: "Book id cannot be changed", code: "VALIDATION_ERROR" }, 400);
+    }
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, id });
+  }
+
+  if (bookMatch && method === "DELETE") {
+    requireAdmin(user, env);
+    const id = decodeURIComponent(bookMatch[1]);
+    const existing = await readRecord("book", id, env);
+    if (!existing || existing.deleted_at) {
+      return json({ success: false, error: "Book not found", code: "NOT_FOUND" }, 404);
+    }
+    const record = { ...existing, deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, id, deleted: true });
+  }
+
   return json({ success: false, error: "Endpoint not implemented yet", code: "NOT_IMPLEMENTED" }, 501);
 }
 
 export default {
   async fetch(request, env) {
     const headers = corsHeaders(request, env);
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers });
-    }
-
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     try {
       const response = await route(request, env);
       const merged = new Headers(response.headers);
       for (const [key, value] of Object.entries(headers)) merged.set(key, value);
       return new Response(response.body, { status: response.status, headers: merged });
     } catch (error) {
-      // Do not log secrets, initData, or request bodies.
       console.error("MidnightBooks API error:", error instanceof Error ? error.message : "unknown");
-      return json({ success: false, error: "Internal server error", code: "INTERNAL_ERROR" }, 500, headers);
+      return json(
+        { success: false, error: error.message || "Internal server error", code: error.status === 403 ? "FORBIDDEN" : "INTERNAL_ERROR" },
+        error.status || 500,
+        headers,
+      );
     }
   },
 };
