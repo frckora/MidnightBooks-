@@ -25,12 +25,23 @@ The technical index may contain identifiers and lookup metadata only. It must no
 
 ## Deployment
 
-The frontend remains on GitHub Pages. This backend needs a separate HTTPS runtime. Cloudflare Workers is a candidate, but no hosting provider or external index has been provisioned yet. Choose the runtime and its small durable index implementation before adding deployment-specific code.
+- Frontend: GitHub Pages.
+- API runtime: Cloudflare Worker `midnightbooks-api`.
+- Worker source/config: this `backend/` directory, deployed from the `telegram-migration` branch.
+- Technical index: Cloudflare D1 database `midnightbooks-index`, binding `DB`.
+- D1 schema: `migrations/0001_technical_index.sql`.
+
+The first deployment is only an API scaffold. It is not yet connected to Telegram storage and must not be treated as a production-ready catalogue backend.
 
 ## Required server secrets / configuration
 
 See `.env.example`. Never commit real values. In particular, never put the bot token, storage chat ID, admin IDs, or Telegram validation secrets in `index.html`.
 
+Configure secrets in the Cloudflare Worker dashboard or with Wrangler. Never paste secrets into GitHub source files or chat.
+
 ## Implementation status
 
-Scaffold and contract planning only. No live Telegram storage chat has been created, no bot token has been configured, and no endpoint is deployed.
+- Cloudflare Worker created and GitHub integration configured for `telegram-migration`.
+- D1 database created in the EU jurisdiction and technical schema applied.
+- D1 binding `DB` connected to the Worker.
+- Telegram storage group, bot token secret, storage adapter, and full API endpoints are not yet configured.
