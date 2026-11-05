@@ -1233,8 +1233,8 @@
       announcements: API_URL + "?action=bootstrap"
     };
     const STATS_API = API_URL;
+    const WORKER_API_URL = "https://midnightbooks-api.frckora.workers.dev";
     const CACHE_KEY = "midnightbooks_cache_v4_apps_script";
-    const ADMIN_PASSWORD = "midnight2026";
 
     const state = {
       page: "home",
@@ -3084,11 +3084,12 @@
           🔐 Вход в админ-панель
         </div>
         <div id="adminLoginForm">
-          <input type="password" id="adminPasswordInput"
-                 class="admin-input" placeholder="Введите пароль">
+          <p style="color:var(--muted);line-height:1.5;">
+            Проверяем права администратора через Telegram…
+          </p>
           <button class="btn primary" id="adminLoginBtn"
                   style="width:100%;margin-top:8px;">
-            Войти
+            Войти через Telegram
           </button>
           <button class="btn" id="closeAdminBtn"
                   style="width:100%;margin-top:6px;">
@@ -3101,21 +3102,38 @@
         () => modal.classList.add("hidden");
       document.getElementById("closeAdminBtn").onclick =
         () => modal.classList.add("hidden");
-      document.getElementById("adminLoginBtn").onclick =
-        function() {
-          const pass = document.getElementById(
-            "adminPasswordInput"
-          ).value;
-          if (pass === ADMIN_PASSWORD) {
-            document.getElementById("adminLoginForm")
-              .style.display = "none";
-            document.getElementById("adminContent")
-              .style.display = "block";
-            renderAdminPanel();
-          } else {
-            toast("❌ Неверный пароль!");
+      document.getElementById("adminLoginBtn").onclick = async function() {
+        const app = tg();
+        const initData = app && app.initData;
+        if (!initData) {
+          toast("❌ Откройте приложение через Telegram");
+          return;
+        }
+        const button = document.getElementById("adminLoginBtn");
+        button.disabled = true;
+        button.textContent = "Проверяем…";
+        try {
+          const response = await fetch(WORKER_API_URL + "/api/v1/me", {
+            method: "GET",
+            headers: { "X-Telegram-Init-Data": initData },
+            cache: "no-store"
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success || !result.isAdmin) {
+            throw new Error(result.code === "FORBIDDEN"
+              ? "Нет прав администратора"
+              : "Не удалось подтвердить права администратора");
           }
-        };
+          document.getElementById("adminLoginForm").style.display = "none";
+          document.getElementById("adminContent").style.display = "block";
+          renderAdminPanel();
+          toast("✅ Администратор подтверждён");
+        } catch (error) {
+          toast("❌ " + (error.message || "Ошибка авторизации"));
+          button.disabled = false;
+          button.textContent = "Повторить проверку";
+        }
+      };
     }
     function closeAdminPanel() {
       document.getElementById("modal")
