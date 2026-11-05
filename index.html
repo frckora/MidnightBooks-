@@ -3130,7 +3130,7 @@
     }
     function renderAdminArts(container) {
       const arts = Array.isArray(state.arts) ? state.arts : [];
-      container.innerHTML = \`
+      container.innerHTML = `
         <div class="admin-box">
           <h3 style="color:var(--silver2);">Добавить арт</h3>
           <input id="artTitle" class="admin-input" placeholder="Название арта">
@@ -3138,17 +3138,17 @@
           <textarea id="artDescription" class="admin-input" rows="2" placeholder="Описание (необязательно)"></textarea>
           <button class="btn primary" id="saveArt" style="width:100%;margin-top:8px;">Добавить арт</button>
         </div>
-        <h3 style="color:var(--silver2);margin-top:16px;">Арты (\${arts.length})</h3>
+        <h3 style="color:var(--silver2);margin-top:16px;">Арты (${arts.length})</h3>
         <div>
-          \${arts.length ? arts.map(art => \`
+          ${arts.length ? arts.map(art => `
             <div class="admin-item">
               <div style="display:flex;gap:10px;align-items:center;min-width:0;">
-                \${art.image_url ? \`<img src="\${h(art.image_url)}" alt="" style="width:54px;height:64px;object-fit:cover;border-radius:7px;">\` : ""}
-                <div><div class="admin-item-title">\${h(art.title)}</div><div class="admin-item-sub">\${h(art.description || "")}</div></div>
+                ${art.image_url ? `<img src="${h(art.image_url)}" alt="" style="width:54px;height:64px;object-fit:cover;border-radius:7px;">` : ""}
+                <div><div class="admin-item-title">${h(art.title)}</div><div class="admin-item-sub">${h(art.description || "")}</div></div>
               </div>
-              <button class="admin-btn danger" data-delete-art="\${h(art.id)}" aria-label="Удалить арт">Удалить</button>
-            </div>\`).join("") : '<div class="empty">Артов пока нет.</div>'}
-        </div>\`;
+              <button class="admin-btn danger" data-delete-art="${h(art.id)}" aria-label="Удалить арт">Удалить</button>
+            </div>`).join("") : '<div class="empty">Артов пока нет.</div>'}
+        </div>`;
       document.getElementById("saveArt")?.addEventListener("click", async () => {
         const app=tg(); if(!app?.initData){toast("Открой приложение через Telegram");return;}
         const title=document.getElementById("artTitle").value.trim();
