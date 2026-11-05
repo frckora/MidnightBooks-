@@ -254,7 +254,7 @@ async function readAllBooks(env) {
   for (const row of rows.results || []) {
     try {
       const book = await readTelegramJson(row.telegram_file_id, env);
-      if (book && !book.deleted_at) books.push(book);
+      if (book && !book.deleted_at) books.push({ ...book, cover_url: book.cover_media_id ? `/api/v1/media/${book.cover_media_id}` : book.cover_url });
     } catch (error) {
       console.error("Unable to read stored book record:", row.record_id, error.message);
     }
@@ -297,6 +297,41 @@ async function saveWelcomeText(value, env) {
   return record.text;
 }
 
+async function storeMediaFile(file, mediaType, ownerId, env) {
+  if (!file || !file.size || file.size > 10 * 1024 * 1024 || !String(file.type || "").startsWith("image/")) {
+    const error = new Error("Choose an image up to 10 MB");
+    error.status = 400;
+    throw error;
+  }
+  const form = new FormData();
+  form.set("chat_id", env.TELEGRAM_STORAGE_CHAT_ID);
+  form.set("document", file, file.name || "image");
+  form.set("disable_notification", "true");
+  const message = await telegramCall("sendDocument", env, form);
+  const doc = message.document;
+  if (!doc?.file_id) throw new Error("Telegram did not return media file id");
+  const mediaId = crypto.randomUUID();
+  await env.DB.prepare(`
+    INSERT INTO media_pointers (media_id, book_id, media_type, chat_id, message_id, telegram_file_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(mediaId, String(ownerId), mediaType, String(message.chat.id), Number(message.message_id), doc.file_id, new Date().toISOString()).run();
+  return { mediaId, fileId: doc.file_id };
+}
+
+async function mediaResponse(mediaId, env) {
+  const row = await env.DB.prepare("SELECT telegram_file_id FROM media_pointers WHERE media_id = ?").bind(mediaId).first();
+  if (!row?.telegram_file_id) return json({ success: false, error: "Media not found" }, 404);
+  const form = new FormData(); form.set("file_id", row.telegram_file_id);
+  const file = await telegramCall("getFile", env, form);
+  const response = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`);
+  if (!response.ok) return json({ success: false, error: "Unable to load media" }, 502);
+  return new Response(response.body, { status: 200, headers: {
+    "content-type": response.headers.get("content-type") || "application/octet-stream",
+    "cache-control": "public, max-age=86400, immutable",
+    "x-content-type-options": "nosniff"
+  }});
+}
+
 async function readJsonBody(request) {
   const raw = await request.text();
   if (new TextEncoder().encode(raw).byteLength > MAX_JSON_BYTES) {
@@ -322,6 +357,9 @@ async function route(request, env) {
   if (path === "/api/v1" || path === "/api/v1/") {
     return json({ success: true, service: "midnightbooks-api", version: 1 });
   }
+
+  const mediaMatch = path.match(/^\\/api\\/v1\\/media\\/([a-f0-9-]+)$/i);
+  if (method === "GET" && mediaMatch) return mediaResponse(mediaMatch[1], env);
 
   let user;
   try { user = await authenticate(request, env); } catch (error) {
@@ -353,7 +391,7 @@ async function route(request, env) {
     ).all();
     const arts = [];
     for (const row of artRows.results || []) {
-      try { const art = await readTelegramJson(row.telegram_file_id, env); if (art && !art.deleted_at) arts.push(art); }
+      try { const art = await readTelegramJson(row.telegram_file_id, env); if (art && !art.deleted_at) arts.push({ ...art, image_url: art.media_id ? `${new URL(request.url).origin}/api/v1/media/${art.media_id}` : art.image_url }); }
       catch (error) { console.error("Unable to read art:", row.record_id, error.message); }
     }
     return json({
@@ -363,6 +401,21 @@ async function route(request, env) {
       notificationsSubscribed: !!subscription?.active,
       migrationStatus: "telegram-books-active",
     });
+  }
+
+  const coverMatch = path.match(/^\\/api\\/v1\\/books\\/([^/]+)\\/cover$/);
+  if (coverMatch && method === "POST") {
+    requireAdmin(user, env);
+    const id = decodeURIComponent(coverMatch[1]);
+    const existing = await readRecord("book", id, env);
+    if (!existing || existing.deleted_at) return json({ success: false, error: "Book not found" }, 404);
+    const form = await request.formData();
+    const file = form.get("file");
+    const media = await storeMediaFile(file, "cover", id, env);
+    const record = { ...existing, cover_media_id: media.mediaId, cover_emoji: "", cover_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, updated_at: new Date().toISOString() };
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, cover_url: record.cover_url, media_id: media.mediaId });
   }
 
   if (path === "/api/v1/notifications/subscription" && (method === "POST" || method === "DELETE")) {
@@ -384,20 +437,19 @@ async function route(request, env) {
   const artMatch = path.match(/^\/api\/v1\/arts\/([^/]+)$/);
   if (path === "/api/v1/arts" && method === "POST") {
     requireAdmin(user, env);
-    const body = await readJsonBody(request);
-    const input = body.art || body;
-    const id = String(input.id || "").trim();
-    const title = String(input.title || "").trim();
-    const imageUrl = String(input.image_url || "").trim();
-    if (!id || !title || !/^https:\/\//i.test(imageUrl)) {
-      return json({ success: false, error: "Art id, title and a valid HTTPS image URL are required" }, 400);
-    }
+    const form = await request.formData();
+    const id = String(form.get("id") || "").trim();
+    const title = String(form.get("title") || "").trim();
+    const description = String(form.get("description") || "");
+    const file = form.get("file");
+    if (!id || !title || !file) return json({ success: false, error: "Art title and image file are required" }, 400);
     const existing = await readRecord("art", id, env);
     if (existing && !existing.deleted_at) return json({ success: false, error: "Art already exists" }, 409);
-    const record = { id, title, image_url: imageUrl, description: String(input.description || ""), record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
+    const media = await storeMediaFile(file, "art", id, env);
+    const record = { id, title, description, media_id: media.mediaId, image_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
     const pointer = await uploadJsonRecord(record, env);
     await saveRecordPointer(record, pointer, env);
-    return json({ success: true, id }, 201);
+    return json({ success: true, id, image_url: record.image_url }, 201);
   }
   if (artMatch && method === "DELETE") {
     requireAdmin(user, env);
