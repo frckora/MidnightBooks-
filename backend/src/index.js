@@ -441,12 +441,15 @@ async function route(request, env) {
     const id = String(form.get("id") || "").trim();
     const title = String(form.get("title") || "").trim();
     const description = String(form.get("description") || "");
+    const bookId = String(form.get("book_id") || "").trim();
     const file = form.get("file");
-    if (!id || !title || !file) return json({ success: false, error: "Art title and image file are required" }, 400);
+    if (!id || !title || !bookId || !file) return json({ success: false, error: "Art title, book, and image file are required" }, 400);
+    const parentBook = await readRecord("book", bookId, env);
+    if (!parentBook || parentBook.deleted_at) return json({ success: false, error: "Selected book was not found" }, 404);
     const existing = await readRecord("art", id, env);
     if (existing && !existing.deleted_at) return json({ success: false, error: "Art already exists" }, 409);
     const media = await storeMediaFile(file, "art", id, env);
-    const record = { id, title, description, media_id: media.mediaId, image_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
+    const record = { id, book_id: bookId, title, description, media_id: media.mediaId, image_url: `${new URL(request.url).origin}/api/v1/media/${media.mediaId}`, record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
     const pointer = await uploadJsonRecord(record, env);
     await saveRecordPointer(record, pointer, env);
     return json({ success: true, id, image_url: record.image_url }, 201);
