@@ -256,6 +256,41 @@ async function readAllBooks(env) {
   return books;
 }
 
+
+async function sendUserMessage(chatId, text, env) {
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  form.set("text", text);
+  form.set("disable_web_page_preview", "true");
+  return telegramCall("sendMessage", env, form);
+}
+
+async function notifyNewBook(book, env) {
+  const rows = await env.DB.prepare("SELECT telegram_user_id FROM notification_subscriptions WHERE active = 1").all();
+  const title = String(book.title || "Новая книга");
+  const author = String(book.author || "");
+  const text = `В MidnightBooks вышла новая книга!\n\n${title}${author ? "\n" + author : ""}\n\nОткрыть библиотеку: https://t.me/Midnight_library1_Bot/MidnightBooks`;
+  const subscribers = rows.results || [];
+  const results = await Promise.allSettled(subscribers.map(row => sendUserMessage(row.telegram_user_id, text, env)));
+  const blocked = results.map((result, index) => result.status === "rejected" ? subscribers[index].telegram_user_id : null).filter(Boolean);
+  if (blocked.length) {
+    const stmt = env.DB.prepare("UPDATE notification_subscriptions SET active = 0, updated_at = ? WHERE telegram_user_id = ?");
+    await Promise.allSettled(blocked.map(id => stmt.bind(new Date().toISOString(), String(id)).run()));
+  }
+  return { sent: results.filter(result => result.status === "fulfilled").length, failed: blocked.length };
+}
+
+async function saveWelcomeText(value, env) {
+  const existing = await readRecord("settings", "welcome", env);
+  const record = {
+    id: "welcome", record_type: "settings", text: String(value || "").slice(0, 4000),
+    schema_version: 1, updated_at: new Date().toISOString()
+  };
+  const pointer = await uploadJsonRecord(record, env);
+  await saveRecordPointer(record, pointer, env);
+  return record.text;
+}
+
 async function readJsonBody(request) {
   const raw = await request.text();
   if (new TextEncoder().encode(raw).byteLength > MAX_JSON_BYTES) {
@@ -298,11 +333,40 @@ async function route(request, env) {
 
   if (method === "GET" && path === "/api/v1/bootstrap") {
     const books = await readAllBooks(env);
+    const welcome = await readRecord("settings", "welcome", env);
+    const subscription = await env.DB.prepare(
+      "SELECT active FROM notification_subscriptions WHERE telegram_user_id = ?"
+    ).bind(String(user.id)).first();
     return json({
       success: true, books, covers: [], files: [], arts: [],
       stats: [], ratings: [], music: [], announcements: [],
+      welcomeText: welcome?.text || "",
+      notificationsSubscribed: !!subscription?.active,
       migrationStatus: "telegram-books-active",
     });
+  }
+
+  if (path === "/api/v1/notifications/subscription" && (method === "POST" || method === "DELETE")) {
+    const active = method === "POST" ? 1 : 0;
+    if (active) {
+      try { await sendUserMessage(user.id, "Вы подписались на уведомления о новых книгах MidnightBooks. Когда в библиотеке появится новая книга, мы сообщим вам здесь."); }
+      catch (error) {
+        return json({ success: false, error: "Сначала откройте бота @Midnight_library1_Bot и нажмите Start, затем повторите подписку.", code: "BOT_NOT_STARTED" }, 409);
+      }
+    }
+    await env.DB.prepare(`
+      INSERT INTO notification_subscriptions (telegram_user_id, active, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(telegram_user_id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at
+    `).bind(String(user.id), active, new Date().toISOString()).run();
+    return json({ success: true, subscribed: !!active });
+  }
+
+  if (path === "/api/v1/settings/welcome" && method === "PUT") {
+    requireAdmin(user, env);
+    const body = await readJsonBody(request);
+    const text = await saveWelcomeText(body.text || "", env);
+    return json({ success: true, welcomeText: text });
   }
 
   if (path === "/api/v1/books" && method === "POST") {
@@ -315,7 +379,12 @@ async function route(request, env) {
     }
     const pointer = await uploadJsonRecord(record, env);
     await saveRecordPointer(record, pointer, env);
-    return json({ success: true, id: record.id }, 201);
+    let notifications = { sent: 0, failed: 0 };
+    if (record.status === "published" || record.status === "active") {
+      try { notifications = await notifyNewBook(record, env); }
+      catch (error) { console.error("New-book notifications failed:", error.message); }
+    }
+    return json({ success: true, id: record.id, notifications }, 201);
   }
 
   const bookMatch = path.match(/^\/api\/v1\/books\/([^/]+)$/);
