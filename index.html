@@ -1234,7 +1234,7 @@
     };
     const STATS_API = API_URL;
     const WORKER_API_URL = "https://midnightbooks-api.frckora.workers.dev";
-    const CACHE_KEY = "midnightbooks_cache_v4_apps_script";
+    const CACHE_KEY = "midnightbooks_cache_v1_telegram";
 
     const state = {
       page: "home",
@@ -1803,12 +1803,24 @@
     }
     async function fetchRemote(silent = false) {
       if (!silent) showLoading();
+      const app = tg();
+      const initData = app && app.initData;
+      if (!initData) throw new Error("Откройте MidnightBooks через Telegram");
 
-      // ИСПРАВЛЕНО: один getBootstrap вместо множества несовместимых запросов.
-      const response = await fetch(API_URL + "?action=getBootstrap&t=" + Date.now(), { cache: "no-store" });
-      if (!response.ok) throw new Error("Не удалось получить данные: HTTP " + response.status);
+      const response = await fetch(WORKER_API_URL + "/api/v1/bootstrap?t=" + Date.now(), {
+        method: "GET",
+        headers: { "X-Telegram-Init-Data": initData },
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        let detail = "";
+        try { detail = (await response.json()).error || ""; } catch {}
+        throw new Error(detail || "Не удалось загрузить каталог: HTTP " + response.status);
+      }
       const payload = await response.json();
-      if (!payload || payload.success === false) throw new Error(payload?.error || "Apps Script не вернул данные");
+      if (!payload || payload.success !== true) {
+        throw new Error(payload?.error || "Worker не вернул каталог");
+      }
 
       const data = {
         books: Array.isArray(payload.books) ? payload.books : [],
@@ -1817,20 +1829,19 @@
         playlists: Array.isArray(payload.music) ? payload.music : [],
         announcements: Array.isArray(payload.announcements) ? payload.announcements : []
       };
-
       applyData(data);
-      applyStatsPayload({ stats: payload.stats, ratings: payload.ratings });
+      applyStatsPayload({ stats: payload.stats || [], ratings: payload.ratings || [] });
       state.books = state.books.map(book => {
         const cover = state.covers.find(c => String(c.book_id) === String(book.id));
         return cover ? { ...book, cover_url: cover.file_url } : book;
       });
       persistLocal();
       render();
-      if (!silent) toast("Библиотека обновлена из Google Таблицы");
+      if (!silent) toast("Каталог загружен из Telegram");
       return payload;
     }
     function showLoading() {
-      document.getElementById("main").innerHTML = '<div class="loading">Загружаем библиотеку из Google Таблицы…</div>';
+      document.getElementById("main").innerHTML = '<div class="loading">Загружаем библиотеку MidnightBooks…</div>';
     }
     async function loadData(force = false) {
       const cached = storageGet(CACHE_KEY, null);
@@ -1877,11 +1888,8 @@
       return apiPost({ action:'incrementStat', book_id:String(bookId), stat:stat });
     }
     async function fetchRemoteStats_() {
-      const response = await fetch(API_URL + '?action=getBootstrap&t=' + Date.now(), { cache:'no-store' });
-      if (!response.ok) throw new Error('Ошибка статистики: HTTP ' + response.status);
-      const payload = await response.json();
-      if (!payload || payload.success === false) throw new Error(payload?.error || 'Ошибка статистики');
-      return payload;
+      // Статистика будет подключена отдельным этапом; пока показываем нулевые значения.
+      return { stats: [], ratings: [] };
     }
     async function loadStats() {
       try { await statsRequest('stats'); render(); }
