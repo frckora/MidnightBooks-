@@ -52,7 +52,8 @@ function constantTimeEqual(a, b) {
 }
 
 async function validateTelegramInitData(initData, botToken, maxAgeSeconds = 86400) {
-  if (!initData || !botToken) throw new Error("AUTH_REQUIRED");
+  if (!initData) throw new Error("INIT_DATA_MISSING");
+  if (!botToken) throw new Error("BOT_TOKEN_MISSING");
   const params = new URLSearchParams(initData);
   const receivedHash = params.get("hash");
   if (!receivedHash) throw new Error("INVALID_INIT_DATA");
