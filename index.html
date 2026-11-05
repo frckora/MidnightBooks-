@@ -2319,7 +2319,8 @@
       const sorted=[...list].sort((a,b)=>num(a.series_order)-num(b.series_order)).slice(0,3);
       if(!sorted.length)return "";
       return `<div class="series-collage">${sorted.map(book=>{
-        const url=book.cover_url || "";
+        const raw=book.cover_url || "";
+        const url=raw.startsWith("/api/v1/media/") ? WORKER_API_URL+raw : raw;
         return url ? `<img src="${h(url)}" alt="${h(book.title)}" loading="lazy">` : `<div class="series-cover-empty"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/></svg></div>`;
       }).join("")}</div>`;
     }
