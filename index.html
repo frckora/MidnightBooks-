@@ -263,6 +263,10 @@
                    sans-serif;
       transition: border .2s ease;
     }
+    .upload-label { display:block; margin:10px 0 5px; padding:12px 14px; border:1px solid rgba(201,199,200,.24); border-radius:10px; background:rgba(100,30,42,.22); color:var(--silver2); font:13px Arial,sans-serif; text-align:center; cursor:pointer; }
+    .file-input { padding:8px; }
+    .image-preview { min-height:48px; margin:6px 0 12px; padding:8px; border:1px dashed rgba(201,199,200,.2); border-radius:10px; color:var(--muted); font:12px Arial,sans-serif; text-align:center; }
+    .image-preview img { max-width:100%; max-height:210px; object-fit:contain; border-radius:8px; }
     .admin-input:focus {
       outline: none;
       border-color: var(--wine2);
@@ -608,6 +612,11 @@
       padding: 16px;
       margin-bottom: 10px;
     }
+    .series-collage { display:flex; align-items:center; height:112px; padding:8px 4px 2px; margin:8px 0 4px; overflow:hidden; }
+    .series-collage img,.series-collage .series-cover-empty { width:70px; height:96px; object-fit:cover; border-radius:8px; border:1px solid rgba(201,199,200,.38); box-shadow:0 6px 15px rgba(0,0,0,.35); background:linear-gradient(145deg,#24131a,#0e080b); display:flex; align-items:center; justify-content:center; color:var(--silver-dark); }
+    .series-collage > :nth-child(1) { transform:rotate(-9deg); }
+    .series-collage > :nth-child(2) { margin-left:-28px; z-index:2; transform:translateY(-5px); }
+    .series-collage > :nth-child(3) { margin-left:-28px; z-index:1; transform:rotate(9deg); }
     .series-name {
       font-size: 20px;
       color: var(--silver);
@@ -1702,11 +1711,8 @@
     }
     function coverHTML(book, cls = "cover") {
       const c = getCover(book);
-      const imageUrl = normalizeCoverUrl(
-        c?.cover_url ||
-        c?.thumbnail_url ||
-        ""
-      );
+      const rawCoverUrl = c?.cover_url || c?.thumbnail_url || "";
+      const imageUrl = rawCoverUrl.startsWith("/api/v1/media/") ? WORKER_API_URL + rawCoverUrl : normalizeCoverUrl(rawCoverUrl);
       if (imageUrl) {
         return `<div class="${cls}">
           <img
@@ -1720,13 +1726,13 @@
                      this.nextElementSibling.classList.remove('hidden')"
           >
           <span class="cover-fallback cover-emoji hidden">
-            ${h(book.cover_emoji || "")}
+            <svg class="ui-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/></svg>
           </span>
         </div>`;
       }
       return `<div class="${cls}">
         <span class="cover-emoji">
-          ${h(book.cover_emoji || "")}
+          <svg class="ui-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/></svg>
         </span>
       </div>`;
     }
@@ -1832,7 +1838,7 @@
         playlists: Array.isArray(payload.music) ? payload.music : [],
         announcements: Array.isArray(payload.announcements) ? payload.announcements : []
       };
-      state.arts = Array.isArray(payload.arts) ? payload.arts : [];
+      state.arts = Array.isArray(payload.arts) ? payload.arts.map(art => ({...art, image_url: art.image_url?.startsWith("/api/v1/media/") ? WORKER_API_URL + art.image_url : art.image_url})) : [];
       state.welcomeText = String(payload.welcomeText || "");
       state.notificationsSubscribed = !!payload.notificationsSubscribed;
       applyData(data);
@@ -2309,6 +2315,14 @@
         </div>
       </article>`;
     }
+    function seriesCollageHTML(list) {
+      const sorted=[...list].sort((a,b)=>num(a.series_order)-num(b.series_order)).slice(0,3);
+      if(!sorted.length)return "";
+      return `<div class="series-collage">${sorted.map(book=>{
+        const url=book.cover_url || "";
+        return url ? `<img src="${h(url)}" alt="${h(book.title)}" loading="lazy">` : `<div class="series-cover-empty"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v15.5"/></svg></div>`;
+      }).join("")}</div>`;
+    }
     function seriesHTML() {
       const groups = {};
       state.books.forEach(b => {
@@ -2351,6 +2365,7 @@
           `<div class="series-card book-card"
                 data-series-card="${h(name)}">
             <div class="series-name"> ${h(name)}</div>
+            ${seriesCollageHTML(list)}
             <div class="series-count">
               ${list.length} ${plural(list.length, "книга", "книги", "книг")}
             </div>
@@ -3136,13 +3151,25 @@
       `;
       adminTab("books");
     }
+    function bindImagePreview(inputId, previewId) {
+      const input=document.getElementById(inputId), preview=document.getElementById(previewId);
+      if(!input||!preview)return;
+      input.addEventListener('change',()=>{
+        const file=input.files?.[0];if(!file){preview.textContent='Изображение не выбрано';return;}
+        if(!file.type.startsWith('image/')){preview.textContent='Выбран не файл изображения';return;}
+        const url=URL.createObjectURL(file);preview.innerHTML='<img alt="Предпросмотр">';
+        preview.querySelector('img').src=url;
+      });
+    }
     function renderAdminArts(container) {
       const arts = Array.isArray(state.arts) ? state.arts : [];
       container.innerHTML = `
         <div class="admin-box">
           <h3 style="color:var(--silver2);">Добавить арт</h3>
           <input id="artTitle" class="admin-input" placeholder="Название арта">
-          <input id="artImageUrl" class="admin-input" placeholder="HTTPS-ссылка на изображение">
+          <label class="upload-label" for="artImageFile">Загрузить изображение</label>
+          <input id="artImageFile" type="file" class="admin-input file-input" accept="image/*">
+          <div id="artImagePreview" class="image-preview">Изображение не выбрано</div>
           <textarea id="artDescription" class="admin-input" rows="2" placeholder="Описание (необязательно)"></textarea>
           <button class="btn primary" id="saveArt" style="width:100%;margin-top:8px;">Добавить арт</button>
         </div>
@@ -3157,17 +3184,21 @@
               <button class="admin-btn danger" data-delete-art="${h(art.id)}" aria-label="Удалить арт">Удалить</button>
             </div>`).join("") : '<div class="empty">Артов пока нет.</div>'}
         </div>`;
+      bindImagePreview('artImageFile','artImagePreview');
       document.getElementById("saveArt")?.addEventListener("click", async () => {
         const app=tg(); if(!app?.initData){toast("Открой приложение через Telegram");return;}
         const title=document.getElementById("artTitle").value.trim();
-        const image_url=document.getElementById("artImageUrl").value.trim();
+        const file=document.getElementById("artImageFile").files?.[0];
         const description=document.getElementById("artDescription").value.trim();
-        if(!title||!image_url){toast("Укажи название и ссылку на изображение");return;}
-        const button=document.getElementById("saveArt");button.disabled=true;button.textContent="Сохраняем…";
+        if(!title||!file){toast("Укажи название и выбери изображение");return;}
+        if(!file.type.startsWith("image/")){toast("Нужен файл изображения");return;}
+        if(file.size>10*1024*1024){toast("Изображение больше 10 МБ");return;}
+        const button=document.getElementById("saveArt");button.disabled=true;button.textContent="Загружаем…";
         try {
-          const response=await fetch(WORKER_API_URL+"/api/v1/arts",{method:"POST",headers:{"Content-Type":"application/json","X-Telegram-Init-Data":app.initData},body:JSON.stringify({art:{id:"art_"+Date.now(),title,image_url,description}})});
+          const body=new FormData();body.set("id","art_"+Date.now());body.set("title",title);body.set("description",description);body.set("file",file,file.name);
+          const response=await fetch(WORKER_API_URL+"/api/v1/arts",{method:"POST",headers:{"X-Telegram-Init-Data":app.initData},body});
           const result=await response.json();if(!response.ok||!result.success)throw new Error(result.error||"Не удалось сохранить арт");
-          state.arts=[...(state.arts||[]),{id:result.id,title,image_url,description}];renderAdminArts(container);toast("Арт сохранён");
+          await fetchRemote(true);renderAdminArts(container);toast("Арт сохранён");
         }catch(e){toast(e.message||"Ошибка");button.disabled=false;button.textContent="Добавить арт";}
       });
       container.querySelectorAll("[data-delete-art]").forEach(button=>button.addEventListener("click",async()=>{
@@ -3320,8 +3351,12 @@
       const file=input?.files?.[0]; if(!file)return null;
       if(!file.type.startsWith('image/'))throw new Error('Файл обложки должен быть изображением.');
       if(file.size>10*1024*1024)throw new Error('Обложка слишком большая. Максимум 10 МБ.');
-      const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(file);});
-      return apiPost({action:'upload_cover',book_id:normalizeAdminId(bookId),file_name:file.name,mime_type:file.type,file_base64:base64});
+      const app=tg(); if(!app?.initData)throw new Error('Открой приложение через Telegram.');
+      const body=new FormData();body.set('file',file,file.name);
+      const response=await fetch(WORKER_API_URL+'/api/v1/books/'+encodeURIComponent(normalizeAdminId(bookId))+'/cover',{method:'POST',headers:{'X-Telegram-Init-Data':app.initData},body});
+      const result=await response.json();if(!response.ok||!result.success)throw new Error(result.error||'Не удалось загрузить обложку');
+      const book=state.books.find(b=>normalizeAdminId(b.id)===normalizeAdminId(bookId));if(book)book.cover_url=result.cover_url;
+      return result;
     }
 
     async function uploadEpub(bookId, input) {
@@ -3430,12 +3465,9 @@
                  placeholder="Триггеры (через запятую)">
           <textarea id="newDescription" class="admin-input" rows="3"
                     placeholder="Аннотация"></textarea>
-          <input type="text" id="newCover" class="admin-input"
-                 placeholder="Обложка (эмодзи)">
-          <input type="text" id="newCoverUrl" class="admin-input"
-                 placeholder="Прямая ссылка на обложку (необязательно)">
-          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;"> Файл обложки</label>
-          <input type="file" id="newCoverFile" class="admin-input" accept="image/*">
+          <label class="upload-label" for="newCoverFile">Загрузить обложку</label>
+          <input type="file" id="newCoverFile" class="admin-input file-input" accept="image/*">
+          <div id="newCoverPreview" class="image-preview">Обложка не выбрана</div>
           <input type="text" id="newSeries" class="admin-input"
                  placeholder="Серия (если есть)">
           <input type="text" id="newSeriesOrder" class="admin-input" placeholder="Номер в серии">
@@ -3462,6 +3494,7 @@
           </button>
         </div>
       `;
+      bindImagePreview('newCoverFile','newCoverPreview');
     }
     async function saveNewBook() {
       try {
@@ -3477,8 +3510,8 @@
           trops: document.getElementById("newTrops").value.split(",").map(t=>t.trim()).filter(Boolean),
           triggers: triggersArray,
           description: document.getElementById("newDescription").value || "Описание пока не добавлено.",
-          cover_emoji: document.getElementById("newCover").value || "",
-          cover_url: document.getElementById("newCoverUrl")?.value || "",
+          cover_emoji: "",
+          cover_url: "",
           series: document.getElementById("newSeries").value || null,
           series_order: document.getElementById("newSeriesOrder")?.value || "",
           release_date: document.getElementById("newReleaseDate")?.value || "",
@@ -3569,12 +3602,9 @@
                  ).join(", ")}" placeholder="Триггеры">
           <textarea id="editDescription" class="admin-input" rows="3"
                     placeholder="Аннотация">${h(book.description)}</textarea>
-          <input type="text" id="editCover" class="admin-input"
-                 value="${h(book.cover_emoji)}" placeholder="Обложка (эмодзи)">
-          <input type="text" id="editCoverUrl" class="admin-input"
-                 value="${h(book.cover_url || "")}" placeholder="Прямая ссылка на обложку">
-          <label style="color:var(--muted);font-size:12px;display:block;margin-top:8px;"> Заменить файл обложки</label>
-          <input type="file" id="editCoverFile" class="admin-input" accept="image/*">
+          <label class="upload-label" for="editCoverFile">Заменить обложку</label>
+          <input type="file" id="editCoverFile" class="admin-input file-input" accept="image/*">
+          <div id="editCoverPreview" class="image-preview">${book.cover_url ? `<img src="${h(book.cover_url)}" alt="Текущая обложка">` : "Обложка пока не загружена"}</div>
           <input type="text" id="editSeries" class="admin-input"
                  value="${h(book.series || "")}" placeholder="Серия">
           <input type="text" id="editSeriesOrder" class="admin-input"
@@ -3594,6 +3624,7 @@
         </div>
       `;
 
+      bindImagePreview('editCoverFile','editCoverPreview');
       const saveBtn = document.getElementById('saveEditBookBtn');
       if (saveBtn) {
         saveBtn.addEventListener('click', function(ev) {
@@ -3631,8 +3662,8 @@
           trops: (document.getElementById('editTrops')?.value || '').split(',').map(t => t.trim()).filter(Boolean),
           triggers: (document.getElementById('editTriggers')?.value || '').split(',').map(t => t.trim()).filter(Boolean),
           description: document.getElementById('editDescription')?.value || 'Описание пока не добавлено.',
-          cover_emoji: document.getElementById('editCover')?.value || '',
-          cover_url: document.getElementById('editCoverUrl')?.value || book.cover_url || '',
+          cover_emoji: "",
+          cover_url: book.cover_url || "",
           series: document.getElementById('editSeries')?.value || null,
           series_order: document.getElementById('editSeriesOrder')?.value || '',
           release_date: document.getElementById('editReleaseDate')?.value || '',
