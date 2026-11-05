@@ -3087,6 +3087,7 @@
         const button = document.getElementById("adminLoginBtn");
         button.disabled = true;
         button.textContent = "Проверяем…";
+        let authDiagnostic = "";
         try {
           const response = await fetch(WORKER_API_URL + "/api/v1/me", {
             method: "GET",
@@ -3094,10 +3095,11 @@
             cache: "no-store"
           });
           const result = await response.json();
+          authDiagnostic = `HTTP ${response.status}; код: ${result.code || "нет"}; ответ: ${result.error || "без описания"}`;
           if (!response.ok || !result.success || !result.isAdmin) {
             throw new Error(result.code === "FORBIDDEN"
               ? "Нет прав администратора"
-              : "Не удалось подтвердить права администратора");
+              : "Не удалось подтвердить права администратора (" + authDiagnostic + ")");
           }
           document.getElementById("adminLoginForm").style.display = "none";
           document.getElementById("adminContent").style.display = "block";
