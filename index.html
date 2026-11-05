@@ -264,7 +264,7 @@
       transition: border .2s ease;
     }
     .upload-label { display:block; margin:10px 0 5px; padding:12px 14px; border:1px solid rgba(201,199,200,.24); border-radius:10px; background:rgba(100,30,42,.22); color:var(--silver2); font:13px Arial,sans-serif; text-align:center; cursor:pointer; }
-    .file-input { padding:8px; }
+    .file-input { position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0,0,0,0); }
     .image-preview { min-height:48px; margin:6px 0 12px; padding:8px; border:1px dashed rgba(201,199,200,.2); border-radius:10px; color:var(--muted); font:12px Arial,sans-serif; text-align:center; }
     .image-preview img { max-width:100%; max-height:210px; object-fit:contain; border-radius:8px; }
     .admin-input:focus {
@@ -3605,7 +3605,7 @@
                     placeholder="Аннотация">${h(book.description)}</textarea>
           <label class="upload-label" for="editCoverFile">Заменить обложку</label>
           <input type="file" id="editCoverFile" class="admin-input file-input" accept="image/*">
-          <div id="editCoverPreview" class="image-preview">${book.cover_url ? `<img src="${h(book.cover_url)}" alt="Текущая обложка">` : "Обложка пока не загружена"}</div>
+          <div id="editCoverPreview" class="image-preview">${book.cover_url ? `<img src="${h(book.cover_url.startsWith("/api/v1/media/") ? WORKER_API_URL+book.cover_url : book.cover_url)}" alt="Текущая обложка">` : "Обложка пока не загружена"}</div>
           <input type="text" id="editSeries" class="admin-input"
                  value="${h(book.series || "")}" placeholder="Серия">
           <input type="text" id="editSeriesOrder" class="admin-input"
