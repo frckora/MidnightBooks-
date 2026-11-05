@@ -9,7 +9,7 @@ ALLOWED_ORIGINS = "https://frckora.github.io"
 [[d1_databases]]
 binding = "DB"
 database_name = "midnightbooks-index"
-database_id = "REPLACE_AFTER_CREATING_D1_DATABASE"
+database_id = "382eeee4-9a1c-42f5-884d-e544f7b65463"
 migrations_dir = "migrations"
 
 # Configure secrets with Wrangler; never put secret values in this file:
