@@ -337,8 +337,16 @@ async function route(request, env) {
     const subscription = await env.DB.prepare(
       "SELECT active FROM notification_subscriptions WHERE telegram_user_id = ?"
     ).bind(String(user.id)).first();
+    const artRows = await env.DB.prepare(
+      "SELECT record_id, telegram_file_id FROM telegram_records WHERE record_type = 'art' AND telegram_file_id IS NOT NULL ORDER BY updated_at DESC"
+    ).all();
+    const arts = [];
+    for (const row of artRows.results || []) {
+      try { const art = await readTelegramJson(row.telegram_file_id, env); if (art && !art.deleted_at) arts.push(art); }
+      catch (error) { console.error("Unable to read art:", row.record_id, error.message); }
+    }
     return json({
-      success: true, books, covers: [], files: [], arts: [],
+      success: true, books, covers: [], files: [], arts,
       stats: [], ratings: [], music: [], announcements: [],
       welcomeText: welcome?.text || "",
       notificationsSubscribed: !!subscription?.active,
@@ -360,6 +368,35 @@ async function route(request, env) {
       ON CONFLICT(telegram_user_id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at
     `).bind(String(user.id), active, new Date().toISOString()).run();
     return json({ success: true, subscribed: !!active });
+  }
+
+  const artMatch = path.match(/^\/api\/v1\/arts\/([^/]+)$/);
+  if (path === "/api/v1/arts" && method === "POST") {
+    requireAdmin(user, env);
+    const body = await readJsonBody(request);
+    const input = body.art || body;
+    const id = String(input.id || "").trim();
+    const title = String(input.title || "").trim();
+    const imageUrl = String(input.image_url || "").trim();
+    if (!id || !title || !/^https:\/\//i.test(imageUrl)) {
+      return json({ success: false, error: "Art id, title and a valid HTTPS image URL are required" }, 400);
+    }
+    const existing = await readRecord("art", id, env);
+    if (existing && !existing.deleted_at) return json({ success: false, error: "Art already exists" }, 409);
+    const record = { id, title, image_url: imageUrl, description: String(input.description || ""), record_type: "art", schema_version: 1, updated_at: new Date().toISOString(), deleted_at: null };
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, id }, 201);
+  }
+  if (artMatch && method === "DELETE") {
+    requireAdmin(user, env);
+    const id = decodeURIComponent(artMatch[1]);
+    const existing = await readRecord("art", id, env);
+    if (!existing || existing.deleted_at) return json({ success: false, error: "Art not found" }, 404);
+    const record = { ...existing, deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const pointer = await uploadJsonRecord(record, env);
+    await saveRecordPointer(record, pointer, env);
+    return json({ success: true, id, deleted: true });
   }
 
   if (path === "/api/v1/settings/welcome" && method === "PUT") {
