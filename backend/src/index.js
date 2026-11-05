@@ -358,7 +358,7 @@ async function route(request, env) {
     return json({ success: true, service: "midnightbooks-api", version: 1 });
   }
 
-  const mediaMatch = path.match(/^\\/api\\/v1\\/media\\/([a-f0-9-]+)$/i);
+  const mediaMatch = path.match(/^\/api\/v1\/media\/([a-f0-9-]+)$/i);
   if (method === "GET" && mediaMatch) return mediaResponse(mediaMatch[1], env);
 
   let user;
@@ -403,7 +403,7 @@ async function route(request, env) {
     });
   }
 
-  const coverMatch = path.match(/^\\/api\\/v1\\/books\\/([^/]+)\\/cover$/);
+  const coverMatch = path.match(/^\/api\/v1\/books\/([^/]+)\/cover$/);
   if (coverMatch && method === "POST") {
     requireAdmin(user, env);
     const id = decodeURIComponent(coverMatch[1]);
