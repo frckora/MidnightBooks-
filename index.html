@@ -3101,7 +3101,7 @@
             cache: "no-store"
           });
           const result = await response.json();
-          authDiagnostic = `HTTP ${response.status}; код: ${result.code || "нет"}; ответ: ${result.error || "без описания"}`;
+          authDiagnostic = `HTTP ${response.status}; Telegram ID: ${result.user?.id || "не получен"}; список админов загружен: ${result.diagnostics?.adminConfigPresent ? "да" : "нет"}; записей: ${result.diagnostics?.adminIdCount ?? "?"}; код: ${result.code || "нет"}`;
           if (!response.ok || !result.success || !result.isAdmin) {
             throw new Error(result.code === "FORBIDDEN"
               ? "Нет прав администратора"
