@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS telegram_records (
   record_id TEXT NOT NULL,
   chat_id TEXT NOT NULL,
   message_id INTEGER NOT NULL,
+  telegram_file_id TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (record_type, record_id),
   UNIQUE (chat_id, message_id)
