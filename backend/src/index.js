@@ -88,10 +88,15 @@ async function authenticate(request, env) {
   return validateTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
 }
 
+function getAdminIds(env) {
+  return String(env.ADMIN_TELEGRAM_USER_IDS || "")
+    .split(/[;,\\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function isAdmin(user, env) {
-  const ids = (env.ADMIN_TELEGRAM_USER_IDS || "")
-    .split(",").map((v) => v.trim()).filter(Boolean);
-  return ids.includes(String(user.id));
+  return getAdminIds(env).includes(String(user.id).trim());
 }
 
 function requireAdmin(user, env) {
@@ -325,10 +330,15 @@ async function route(request, env) {
   }
 
   if (method === "GET" && path === "/api/v1/me") {
+    const adminIds = getAdminIds(env);
     return json({
       success: true,
       user: { id: String(user.id) },
-      isAdmin: isAdmin(user, env),
+      isAdmin: adminIds.includes(String(user.id).trim()),
+      diagnostics: {
+        adminConfigPresent: adminIds.length > 0,
+        adminIdCount: adminIds.length,
+      },
     });
   }
 
