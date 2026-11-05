@@ -3168,6 +3168,10 @@
         <div class="admin-box">
           <h3 style="color:var(--silver2);">Добавить арт</h3>
           <input id="artTitle" class="admin-input" placeholder="Название арта">
+          <select id="artBookSelect" class="admin-input">
+            <option value="">Выберите книгу</option>
+            ${state.books.map(book => `<option value="${h(String(book.id))}">${h(book.title || "Без названия")}</option>`).join("")}
+          </select>
           <label class="upload-label" for="artImageFile">Загрузить изображение</label>
           <input id="artImageFile" type="file" class="admin-input file-input" accept="image/*">
           <div id="artImagePreview" class="image-preview">Изображение не выбрано</div>
@@ -3189,14 +3193,16 @@
       document.getElementById("saveArt")?.addEventListener("click", async () => {
         const app=tg(); if(!app?.initData){toast("Открой приложение через Telegram");return;}
         const title=document.getElementById("artTitle").value.trim();
+        const bookId=document.getElementById("artBookSelect").value;
         const file=document.getElementById("artImageFile").files?.[0];
         const description=document.getElementById("artDescription").value.trim();
+        if(!bookId){toast("Сначала выбери книгу");return;}
         if(!title||!file){toast("Укажи название и выбери изображение");return;}
         if(!file.type.startsWith("image/")){toast("Нужен файл изображения");return;}
         if(file.size>10*1024*1024){toast("Изображение больше 10 МБ");return;}
         const button=document.getElementById("saveArt");button.disabled=true;button.textContent="Загружаем…";
         try {
-          const body=new FormData();body.set("id","art_"+Date.now());body.set("title",title);body.set("description",description);body.set("file",file,file.name);
+          const body=new FormData();body.set("id","art_"+Date.now());body.set("book_id",bookId);body.set("title",title);body.set("description",description);body.set("file",file,file.name);
           const response=await fetch(WORKER_API_URL+"/api/v1/arts",{method:"POST",headers:{"X-Telegram-Init-Data":app.initData},body});
           const result=await response.json();if(!response.ok||!result.success)throw new Error(result.error||"Не удалось сохранить арт");
           await fetchRemote(true);renderAdminArts(container);toast("Арт сохранён");
