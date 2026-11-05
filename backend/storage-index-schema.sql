@@ -1,12 +1,13 @@
 -- MidnightBooks technical pointer index.
--- Canonical catalogue/media/user records remain in Telegram.
--- This schema stores only identifiers and lookup metadata.
+-- Canonical catalogue/media/user records remain in Telegram as JSON documents and media files.
+-- D1 stores only stable identifiers, Telegram file/message pointers and lookup metadata.
 
 CREATE TABLE IF NOT EXISTS telegram_records (
   record_type TEXT NOT NULL,
   record_id TEXT NOT NULL,
   chat_id TEXT NOT NULL,
   message_id INTEGER NOT NULL,
+  telegram_file_id TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (record_type, record_id),
   UNIQUE (chat_id, message_id)
@@ -49,4 +50,4 @@ CREATE INDEX IF NOT EXISTS idx_media_book_type
   ON media_pointers (book_id, media_type);
 
 -- Do not add user ratings, favorites, reading status, annotations, or book content
--- to this index. Those remain canonical Telegram records.
+-- to this index. Those remain canonical Telegram JSON records.
