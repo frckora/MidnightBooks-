@@ -2031,7 +2031,7 @@
       const welcome = String(state.welcomeText || "").trim();
       const subscribed = !!state.notificationsSubscribed;
       document.getElementById("main").innerHTML = `
-        ${welcome ? `<section class="welcome">${h(welcome)}</section>` : ""}
+        <section class="welcome" aria-label="Приветственное слово">${welcome ? h(welcome) : ""}</section>
         <div class="notify-card">
           <div style="color:var(--silver2)"><svg class="ui-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></div>
           <div class="notify-copy">
@@ -2528,6 +2528,7 @@
         return;
       }
       const tracks = tracksFor(b.id);
+      const arts = (Array.isArray(state.arts) ? state.arts : []).filter(art => String(art.book_id) === String(b.id));
       const file = fileFor(b.id);
       const quotes = Array.isArray(b.quotes)
         ? b.quotes
@@ -2560,9 +2561,9 @@
                   data-mtab="description">
              Описание
           </button>
-          <button class="${state.modalTab === "playlist" ? "active" : ""}"
-                  data-mtab="playlist">
-             Плейлист
+          <button class="${state.modalTab === "arts" ? "active" : ""}"
+                  data-mtab="arts">
+             Арты
           </button>
           <button class="${state.modalTab === "quotes" ? "active" : ""}"
                   data-mtab="quotes">
@@ -2570,7 +2571,7 @@
           </button>
         </div>
         <div id="modalContent">
-          ${modalContent(b, tracks, quotes)}
+          ${modalContent(b, tracks, quotes, arts)}
         </div>
         <div class="modal-actions">
           <button class="btn primary" id="downloadBtn">
@@ -2613,17 +2614,18 @@
             );
           };
         });
-      document.querySelectorAll("[data-track]")
-        .forEach(x => {
-          x.onclick = () => {
-            playTracks(
-              tracks,
-              Number(x.dataset.track)
-            );
-          };
-        });
     }
-    function modalContent(b, tracks, quotes) {
+    function modalContent(b, tracks, quotes, arts = []) {
+      if (state.modalTab === "arts") {
+        return arts.length
+          ? `<div class="book-art-gallery">${arts.map(art => `
+              <figure style="margin:0 0 14px;">
+                <img src="${h(art.image_url || "")}" alt="${h(art.title || "Арт")}" style="display:block;width:100%;max-height:520px;object-fit:contain;border-radius:12px;background:rgba(0,0,0,.2);">
+                <figcaption style="color:var(--silver2);font-size:14px;margin-top:7px;">${h(art.title || "")}</figcaption>
+                ${art.description ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;">${h(art.description)}</div>` : ""}
+              </figure>`).join("")}</div>`
+          : '<div class="empty">Арты пока не добавлены.</div>';
+      }
       if (state.modalTab === "playlist") {
         return tracks.length
           ? tracks.map((t, i) =>
@@ -2799,11 +2801,7 @@
         <button class="close" id="closeModal">×</button>
         <div class="section-title" style="margin-top:3px">О нас</div>
         <div class="about">
-          <p><b>MidnightBooks</b> — библиотека готовых переводов, собранная в удобном формате мини-приложения.</p>
-          <p>Здесь можно искать книги, сохранять их в избранное, отмечать прогресс чтения, ставить оценки и слушать добавленные плейлисты.</p>
-          <p style="color:var(--muted);font:12px Arial">
-            Книги, файлы, обложки, музыка, анонсы, оценки и общая статистика хранятся в Google Таблице и Google Drive. Избранное и личный статус чтения остаются локальными для пользователя.
-          </p>
+
         </div>
         <div class="action-row">
           <button class="btn primary" id="aboutChannel">
