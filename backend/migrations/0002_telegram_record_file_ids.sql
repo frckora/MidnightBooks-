@@ -1,3 +1,5 @@
--- Store Telegram file IDs for canonical JSON record documents.
--- Nullable for compatibility with any pre-existing pointer rows.
-ALTER TABLE telegram_records ADD COLUMN telegram_file_id TEXT;
+-- The telegram_file_id column was added directly in the Cloudflare D1 Console
+-- before Wrangler migration tracking was initialized.
+-- Migration 0001 now includes this column for fresh databases.
+-- This no-op migration preserves the existing migration sequence without
+-- attempting to add the column a second time.
