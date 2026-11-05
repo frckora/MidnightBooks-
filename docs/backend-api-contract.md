@@ -1,6 +1,12 @@
 # MidnightBooks backend API contract (migration draft)
 
-Base path: `/api/v1`. All responses are JSON. All authenticated requests must include Telegram Mini App `initData` in an Authorization header or a documented request header. The server validates Telegram's signature and auth_date; the client must never send a trusted user_id as proof of identity.
+Base path: `/api/v1`. All responses are JSON. Authenticated requests must include Telegram Mini App `initData` in an Authorization header or the documented request header. The server validates Telegram's signature and `auth_date`; the client must never send a trusted user_id as proof of identity.
+
+## Telegram record storage
+
+Canonical metadata is stored as UTF-8 JSON documents in the private Telegram storage group. D1 stores each record's `record_type`, `record_id`, `chat_id`, `message_id`, `telegram_file_id` and `updated_at`. The Worker reads a record by resolving its pointer in D1, calling Telegram `getFile` with the stored `file_id`, and downloading the returned file path. Do not attempt to read arbitrary chat history by message ID; the Bot API does not provide that operation.
+
+Writes upload the new JSON document first and update the D1 pointer only after Telegram confirms success. A failed upload must leave the previous pointer intact.
 
 ## Bootstrap
 
@@ -26,8 +32,8 @@ The migration UI will stop using playlists and announcements; these fields exist
 
 ## Catalogue administration
 
-- `POST /books` — create a book record in Telegram and write its pointer to the technical index.
-- `PATCH /books/{bookId}` — edit a book record.
+- `POST /books` — create a book JSON record in Telegram and write its pointer to the technical index.
+- `PATCH /books/{bookId}` — upload an updated book JSON record and replace its pointer.
 - `DELETE /books/{bookId}` — soft-delete a book record; physical deletion is a separate admin-only maintenance action.
 - `POST /books/{bookId}/cover` — upload a cover to Telegram and associate its message/file pointer.
 - `POST /books/{bookId}/epub` — upload an EPUB to Telegram and associate its message/file pointer.
@@ -38,7 +44,7 @@ All admin endpoints require a server-verified Telegram user ID in the configured
 
 ## User library
 
-- `GET /me/library` — return the current user's favorites, reading statuses and ratings.
+- `GET /me/library` — return the current user's favorites, reading statuses and ratings from Telegram JSON records.
 - `PUT /me/books/{bookId}` — upsert the current user's status/favorite state.
 - `PUT /me/books/{bookId}/rating` — set a rating from 1 to 5.
 
@@ -46,7 +52,7 @@ The server derives the user ID from verified initData. It ignores/rejects a clie
 
 ## Statistics
 
-- `POST /books/{bookId}/events` — record a view or download event.
+- `POST /books/{bookId}/events` — record a view or download event in Telegram.
 - `GET /stats` — admin-only aggregate statistics.
 
 ## Media delivery
