@@ -3371,12 +3371,17 @@
       if (!file) return null;
       if (!file.name.toLowerCase().endsWith('.epub')) throw new Error('Можно загружать только EPUB.');
       if (file.size > 20 * 1024 * 1024) throw new Error('EPUB слишком большой. Максимум 20 МБ.');
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-        reader.onerror = reject; reader.readAsDataURL(file);
+      const app = tg();
+      if (!app?.initData) throw new Error('Открой приложение через Telegram.');
+      const body = new FormData();
+      body.set('file', file, file.name);
+      const response = await fetch(WORKER_API_URL + '/api/v1/books/' + encodeURIComponent(normalizeAdminId(bookId)) + '/epub', {
+        method: 'POST',
+        headers: { 'X-Telegram-Init-Data': app.initData },
+        body
       });
-      const result = await apiPost({ action:'upload_epub', book_id:normalizeAdminId(bookId), file_name:file.name, mime_type:file.type || 'application/epub+zip', file_base64:base64 });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Не удалось загрузить EPUB');
       return result;
     }
 
