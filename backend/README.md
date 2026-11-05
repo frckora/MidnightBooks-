@@ -1,27 +1,27 @@
 # MidnightBooks backend
 
-This folder is the server-side API layer for the Telegram Mini App. It is intentionally separate from GitHub Pages: GitHub Pages serves the static `index.html` only and cannot run this backend.
+This folder contains the server-side API for the Telegram Mini App. GitHub Pages serves the static frontend; Cloudflare Workers runs the API.
 
 ## Responsibilities
 
-- Validate Telegram Mini App `initData` on every authenticated request.
+- Validate Telegram Mini App `initData` on authenticated requests.
 - Keep the Telegram bot token in server-side secrets.
-- Read/write canonical book records and media in the private Telegram storage group.
-- Maintain a small technical index (stable IDs, chat/message IDs, file IDs, lookup keys and cursors). The index is not the catalogue/content database.
+- Store canonical book JSON records and media in the private Telegram storage group.
+- Maintain a small D1 technical index of stable IDs, Telegram chat/message/file pointers and lookup keys.
 - Enforce admin permissions on the server.
-- Provide bootstrap, book CRUD, media upload/download, user library, ratings and statistics endpoints.
+- Extend the API over time for media, user library, ratings and statistics.
 
 ## Data ownership
 
 | Data | Canonical location |
 | --- | --- |
-| Book metadata, authors, series, annotations, tropes, triggers, quotes | Telegram messages |
+| Book metadata, authors, series, annotations, tropes, triggers, quotes | Telegram JSON documents |
 | Covers, EPUBs, arts | Telegram files/messages |
-| Favorites, reading status, ratings, preferences | Private Telegram records |
-| Views/download events | Telegram event/aggregate records |
-| Message pointers and lookup index | Small technical index service |
+| Favorites, reading status, ratings, preferences | Private Telegram records (planned) |
+| Views/download events | Telegram event/aggregate records (planned) |
+| Message pointers and lookup index | Cloudflare D1 |
 
-The technical index may contain identifiers and lookup metadata only. It must not become a second copy of book content or user reading data.
+D1 is a technical pointer/search index only. It must not become a second copy of book content or user reading data.
 
 ## Deployment
 
@@ -29,9 +29,9 @@ The technical index may contain identifiers and lookup metadata only. It must no
 - API runtime: Cloudflare Worker `midnightbooks-api`.
 - Worker source/config: this `backend/` directory, deployed from the `telegram-migration` branch.
 - Technical index: Cloudflare D1 database `midnightbooks-index`, binding `DB`.
-- D1 schema: `migrations/0001_technical_index.sql`.
+- D1 migrations: `migrations/`.
 
-The first deployment is only an API scaffold. It is not yet connected to Telegram storage and must not be treated as a production-ready catalogue backend.
+The D1 schema was initially applied manually in the Cloudflare dashboard. The `0001` migration now describes the complete initial schema, including `telegram_file_id`. The `0002` migration is intentionally a no-op because that column was added manually before Wrangler migration tracking was initialized. Do not manually execute `0002` as SQL.
 
 ## Required server secrets / configuration
 
@@ -42,6 +42,13 @@ Configure secrets in the Cloudflare Worker dashboard or with Wrangler. Never pas
 ## Implementation status
 
 - Cloudflare Worker created and GitHub integration configured for `telegram-migration`.
-- D1 database created in the EU jurisdiction and technical schema applied.
+- D1 database created in the EU jurisdiction; core tables and indexes are present.
 - D1 binding `DB` connected to the Worker.
-- Telegram storage group, bot token secret, storage adapter, and full API endpoints are not yet configured.
+- Private Telegram storage group created and bot added with posting/media permissions.
+- Telegram bot token secret and storage chat ID configured in Worker.
+- First Telegram JSON book-storage adapter implemented: create, update, soft-delete and bootstrap for book records.
+- Admin Telegram user IDs are not yet configured.
+- Frontend still uses the legacy Google Apps Script API and has not yet been connected to this Worker.
+- Media upload/download, user library, ratings, arts management and statistics endpoints remain to be implemented and tested.
+
+This is an in-progress migration layer, not yet a production-ready replacement for the existing app.
