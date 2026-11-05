@@ -1,0 +1,17 @@
+name = "midnightbooks-api"
+main = "src/index.js"
+compatibility_date = "2026-11-05"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGINS = "https://frckora.github.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "midnightbooks-index"
+database_id = "REPLACE_AFTER_CREATING_D1_DATABASE"
+migrations_dir = "migrations"
+
+# Configure secrets with Wrangler; never put secret values in this file:
+# npx wrangler secret put TELEGRAM_BOT_TOKEN
+# npx wrangler secret put ADMIN_TELEGRAM_USER_IDS
