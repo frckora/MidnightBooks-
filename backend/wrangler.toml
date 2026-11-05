@@ -6,6 +6,10 @@ workers_dev = true
 [vars]
 ALLOWED_ORIGINS = "https://frckora.github.io,https://midnightbooks.pages.dev"
 ADMIN_TELEGRAM_USER_IDS = "1052038268"
+TELEGRAM_TOPIC_COVERS = "2"
+TELEGRAM_TOPIC_BOOKS = "14"
+TELEGRAM_TOPIC_ARTS = "15"
+TELEGRAM_TOPIC_FILES = "16"
 
 [[d1_databases]]
 binding = "DB"
