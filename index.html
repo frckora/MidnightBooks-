@@ -2475,7 +2475,8 @@
         </div>
         <div class="teaser" style="text-align:center;padding:10px 4px;">MidnightBooks</div>
       `;
-      document.getElementById("profileAdmin")?.addEventListener("click", showAdminLogin);
+      if (!isCurrentUserAdmin()) document.getElementById("profileAdmin")?.remove();
+      if (isCurrentUserAdmin()) document.getElementById("profileAdmin")?.addEventListener("click", showAdminLogin);
       document.getElementById("profileChannel")?.addEventListener("click", openChannel);
       document.getElementById("profileRefresh")?.addEventListener("click", () => loadData(true));
     }
@@ -3038,8 +3039,13 @@
     // =========================
     let adminClickCount = 0;
     let adminClickTimer = null;
+    function isCurrentUserAdmin() {
+      const id = tg()?.initDataUnsafe?.user?.id;
+      return String(id || "") === "1052038268";
+    }
     document.getElementById("brandLogo")
       .addEventListener("click", function() {
+        if (!isCurrentUserAdmin()) return;
         adminClickCount++;
         if (adminClickCount === 5) {
           showAdminLogin();
