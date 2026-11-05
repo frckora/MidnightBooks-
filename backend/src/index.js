@@ -65,7 +65,7 @@ async function validateTelegramInitData(initData, botToken, maxAgeSeconds = 8640
     new TextEncoder().encode("WebAppData"),
     new TextEncoder().encode(botToken),
   );
-  const calculated = hex(await hmacSha256(secretKey, checkString));
+  const calculated = hex(await hmacSha256(secretKey, new TextEncoder().encode(checkString)));
   if (!constantTimeEqual(calculated, receivedHash)) throw new Error("INVALID_INIT_DATA");
 
   const authDate = Number(params.get("auth_date") || 0);
