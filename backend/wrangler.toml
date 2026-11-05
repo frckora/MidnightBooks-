@@ -4,6 +4,7 @@ compatibility_date = "2026-11-05"
 workers_dev = true
 
 [vars]
+TELEGRAM_STORAGE_CHAT_ID = "-1004494249936"
 ALLOWED_ORIGINS = "https://frckora.github.io,https://midnightbooks.pages.dev"
 ADMIN_TELEGRAM_USER_IDS = "1052038268"
 TELEGRAM_TOPIC_COVERS = "2"
